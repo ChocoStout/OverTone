@@ -2,9 +2,26 @@
 
   <PropertyGroup>
     <TargetFramework>net10.0</TargetFramework>
-    <ImplicitUsings>enable</ImplicitUsings>
-    <Nullable>enable</Nullable>
+
+    <!-- NuGet package identity -->
+    <PackageId>OverTone</PackageId>
+    <Title>OverTone — Color Palette Extractor</Title>
+    <Description>
+      Extract perceptually distinct color palettes from images using eight algorithms:
+      K-Means, Median Cut, Octree, Fuzzy C-Means, Popularity, Wu, and NeuQuant.
+      Supports local files and URLs. Async-first, zero extra BCL dependencies.
+    </Description>
+    <PackageTags>color;palette;quantization;image;kmeans;octree;neuquant;wu</PackageTags>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+    <PackageProjectUrl>https://github.com/ChocoStout/OverTone</PackageProjectUrl>
+    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+    <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>
+
+  <ItemGroup>
+    <None Include="..\README.md" Pack="true" PackagePath="\" />
+  </ItemGroup>
 
   <ItemGroup>
     <PackageReference Include="StbImageSharp" Version="2.30.15" />
