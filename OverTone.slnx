@@ -1,0 +1,4 @@
+<Solution>
+  <Project Path="OverTone.Sample/OverTone.Sample.csproj" />
+  <Project Path="OverTone/OverTone.csproj" />
+</Solution>
