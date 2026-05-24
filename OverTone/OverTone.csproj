@@ -12,7 +12,7 @@
       Supports local files and URLs. Async-first, zero extra BCL dependencies.
     </Description>
     <PackageTags>color;palette;quantization;image;kmeans;octree;neuquant;wu</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
+    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/ChocoStout/OverTone</PackageProjectUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>
