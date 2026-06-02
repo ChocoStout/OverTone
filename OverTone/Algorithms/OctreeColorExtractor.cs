@@ -1,61 +1,35 @@
 using OverTone;
-using StbImageSharp;
 
 namespace OverTone.Algorithms;
 
 /// <summary>
-/// Extracts a dominant color palette from image data using Octree color quantization.
+/// Extracts a dominant color palette using Octree color quantization. Colors are inserted into an
+/// octree whose leaves aggregate similar colors; the tree is then pruned until at most the requested
+/// number of leaves remain. Histogram-based, so memory stays bounded regardless of image size.
 /// </summary>
-/// <remarks>
-/// Octree quantization builds a tree where leaves represent aggregated colors. The tree
-/// is pruned until the requested number of leaves (colors) remains. 
-/// </remarks>
-public class OctreeColorExtractor : IColorPaletteExtractor
+public sealed class OctreeColorExtractor : ColorPaletteExtractorBase
 {
     /// <inheritdoc />
-    public PaletteAlgorithm Algorithm => PaletteAlgorithm.Octree;
+    public override PaletteAlgorithm Algorithm => PaletteAlgorithm.Octree;
 
-    /// <summary>
-    /// Extracts a palette of dominant colors using the Octree quantization algorithm.
-    /// </summary>
-    /// <param name="imageData">Raw image bytes (PNG, JPEG, etc.).</param>
-    /// <param name="colorCount">The requested number of colors in the output palette.</param>
-    /// <returns>A task that resolves to a list of <see cref="ColorPalette"/> ordered by pixel frequency.</returns>
-    public async Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount)
+    /// <inheritdoc />
+    protected override List<ColorPalette> ExtractCore(byte[] rgba, int colorCount, int maxDegreeOfParallelism)
     {
-        if (colorCount <= 0)
-            throw new ArgumentOutOfRangeException(nameof(colorCount), "colorCount must be greater than zero");
-
-        var image = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
-        var pixelData = image.Data;
-
-        // Build octree from visible pixels
         var octree = new Octree();
 
-        for (var i = 0; i < pixelData.Length; i += 4)
+        for (var i = 0; i < rgba.Length; i += 4)
         {
-            var r = pixelData[i];
-            var g = pixelData[i + 1];
-            var b = pixelData[i + 2];
-            var a = pixelData[i + 3];
-
-            if (a <= 128)
+            if (rgba[i + 3] <= 128)
                 continue; // skip transparent pixels
-
-            octree.AddColor(r, g, b);
+            octree.AddColor(rgba[i], rgba[i + 1], rgba[i + 2]);
         }
 
-        // Reduce the tree until we have at most colorCount leaves
-        octree.Reduce((byte)colorCount);
+        octree.Reduce(colorCount);
 
-        var paletteEntries = octree.GetPalette().Take(colorCount).Select(e => new ColorPalette
-        {
-            R = e.R,
-            G = e.G,
-            B = e.B,
-            PixelCount = e.Count
-        }).OrderByDescending(p => p.PixelCount).ToList();
-
-        return await Task.FromResult(paletteEntries);
+        return octree.GetPalette()
+            .Take(colorCount)
+            .Select(e => new ColorPalette { R = e.R, G = e.G, B = e.B, PixelCount = e.Count })
+            .OrderByDescending(p => p.PixelCount)
+            .ToList();
     }
 }

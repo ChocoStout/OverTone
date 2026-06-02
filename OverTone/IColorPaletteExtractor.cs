@@ -15,6 +15,19 @@ public interface IColorPaletteExtractor
     Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount);
 
     /// <summary>
+    /// Extracts a palette, optionally using multiple threads. The default implementation ignores
+    /// <paramref name="maxDegreeOfParallelism"/> and runs the sequential overload — extractors that
+    /// benefit from parallelism (e.g. K-Means) override this. Implementers only need to provide the
+    /// two-argument overload above; overriding this one is optional.
+    /// </summary>
+    /// <param name="imageData">The raw image bytes (for example, PNG or JPEG contents).</param>
+    /// <param name="colorCount">The number of colors to include in the returned palette.</param>
+    /// <param name="maxDegreeOfParallelism">Maximum worker threads; values &lt;= 1 run sequentially.</param>
+    /// <returns>A task that resolves to a list of <see cref="ColorPalette"/> items.</returns>
+    Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount, int maxDegreeOfParallelism)
+        => ExtractColorPaletteAsync(imageData, colorCount);
+
+    /// <summary>
     /// The algorithm identifier implemented by this extractor.
     /// </summary>
     PaletteAlgorithm Algorithm { get; }

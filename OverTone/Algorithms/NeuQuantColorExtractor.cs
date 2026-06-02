@@ -1,54 +1,36 @@
 using OverTone;
-using StbImageSharp;
 
 namespace OverTone.Algorithms;
 
 /// <summary>
-/// NeuQuant-like neural quantizer implementation (compact, simplified).
-/// Produces a palette by training a small neural network on sampled pixels.
-/// This is not a byte-for-byte port of the original NeuQuant but follows the
-/// same idea: competitive learning to discover representative colors.
+/// NeuQuant-like competitive-learning quantizer. Trains a small network of neurons against sampled
+/// visible pixels and returns the most frequently assigned neurons as palette entries. Not a
+/// byte-for-byte port of the original — same idea (competitive learning to discover representative colors).
 /// </summary>
-/// <summary>
-/// NeuQuant-like competitive-learning quantizer. Trains a small network of neurons
-/// against sampled visible pixels and returns the most frequently assigned neurons
-/// as palette entries.
-/// </summary>
-public class NeuQuantColorExtractor : IColorPaletteExtractor
+public sealed class NeuQuantColorExtractor : ColorPaletteExtractorBase
 {
     /// <inheritdoc />
-    public PaletteAlgorithm Algorithm => PaletteAlgorithm.NeuQuant;
+    public override PaletteAlgorithm Algorithm => PaletteAlgorithm.NeuQuant;
 
-    // Number of neurons (colors) the network maintains during training. The classic
-    // NeuQuant uses 256, but this value is configurable for speed/quality tradeoffs.
     private readonly int _neuronCount;
-
-    // Number of training iterations (passes over the sampled pixels).
     private readonly int _trainingIterations;
 
-    /// <summary>
-    /// Create a new NeuQuant-like extractor.
-    /// </summary>
-    /// <param name="neuronCount">Number of neurons used by the network (default 256).</param>
-    /// <param name="trainingIterations">Number of training iterations (default 100).</param>
-    public NeuQuantColorExtractor(int neuronCount = 256, int trainingIterations = 100)
+    /// <summary>Creates the extractor with the given options (defaults when <c>null</c>).</summary>
+    public NeuQuantColorExtractor(NeuQuantOptions? options = null)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(neuronCount);
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(trainingIterations);
+        var o = options ?? new NeuQuantOptions(256, 100);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(o.NeuronCount);
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(o.TrainingIterations);
 
-        _neuronCount = neuronCount;
-        _trainingIterations = trainingIterations;
+        _neuronCount = o.NeuronCount;
+        _trainingIterations = o.TrainingIterations;
     }
 
-    public async Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount)
+    /// <inheritdoc />
+    protected override List<ColorPalette> ExtractCore(byte[] rgba, int colorCount, int maxDegreeOfParallelism)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(colorCount);
-
-        var image = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
-        var pixels = image.Data;
-
         // Collect a subsample of visible pixels (alpha > 128).
-        var sampled = SampleVisiblePixels(pixels, maxSamples: 16000);
+        var sampled = SampleVisiblePixels(rgba, maxSamples: 16000);
 
         if (sampled.Count == 0)
             throw new Exception("No visible pixels found on image");
@@ -119,10 +101,8 @@ public class NeuQuantColorExtractor : IColorPaletteExtractor
             palette.Add(new ColorPalette { R = r, G = g, B = b, PixelCount = counts[i] });
         }
 
-        // Order by frequency and return top colorCount
-        var result = palette.OrderByDescending(p => p.PixelCount).Take(colorCount).ToList();
-
-        return await Task.FromResult(result);
+        // Order by frequency and return top colorCount.
+        return palette.OrderByDescending(p => p.PixelCount).Take(colorCount).ToList();
     }
 
     private static List<byte[]> SampleVisiblePixels(byte[] pixels, int maxSamples)

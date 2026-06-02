@@ -19,10 +19,10 @@ public static class PalettePostProcessing
         {
             var isDistinct = result.All(accepted => !(ColorMetrics.EuclideanRgbDistance(candidate, accepted) < minRgbDistance));
 
-            if (isDistinct) 
+            if (isDistinct)
                 result.Add(candidate);
 
-            if (result.Count == input.Count) 
+            if (result.Count == input.Count)
                 break;
         }
 
@@ -42,13 +42,15 @@ public static class PalettePostProcessing
 
         foreach (var candidate in input.OrderByDescending(p => p.PixelCount))
         {
-            var labCandidate = ConvertRgbToLab(candidate.R, candidate.G, candidate.B);
-            var isDistinct = result.Select(accepted => ConvertRgbToLab(accepted.R, accepted.G, accepted.B)).All(labAccepted => !(ComputeDeltaE(labCandidate, labAccepted) < minDeltaE));
+            var labCandidate = ColorMetrics.RgbToLab(candidate.R, candidate.G, candidate.B);
+            var isDistinct = result
+                .Select(accepted => ColorMetrics.RgbToLab(accepted.R, accepted.G, accepted.B))
+                .All(labAccepted => !(ColorMetrics.DeltaE76(labCandidate, labAccepted) < minDeltaE));
 
-            if (isDistinct) 
+            if (isDistinct)
                 result.Add(candidate);
 
-            if (maxCount.HasValue && result.Count >= maxCount.Value) 
+            if (maxCount.HasValue && result.Count >= maxCount.Value)
                 break;
         }
 
@@ -74,7 +76,7 @@ public static class PalettePostProcessing
 
         // Pre-compute Lab for every candidate once.
         var labs = candidates
-            .Select(c => ConvertRgbToLab(c.R, c.G, c.B))
+            .Select(c => ColorMetrics.RgbToLab(c.R, c.G, c.B))
             .ToArray();
 
         var selected  = new List<int>(count);
@@ -91,7 +93,7 @@ public static class PalettePostProcessing
 
         // Update min-distances from the seed.
         for (var i = 0; i < candidates.Count; i++)
-            minDistTo[i] = ComputeDeltaE(labs[seed], labs[i]);
+            minDistTo[i] = ColorMetrics.DeltaE76(labs[seed], labs[i]);
 
         while (selected.Count < count)
         {
@@ -109,69 +111,22 @@ public static class PalettePostProcessing
                 }
             }
 
-            if (best == -1) break;
+            // Stop if no candidate remains, or the farthest one is an exact perceptual duplicate of
+            // an already-selected color (Lab distance 0). This happens when the image has fewer
+            // distinct colors than requested — return fewer colors rather than emitting duplicates.
+            if (best == -1 || bestDist <= 0.0) break;
 
             selected.Add(best);
 
             // Update running min-distances using the newly added color.
             for (var i = 0; i < candidates.Count; i++)
             {
-                var d = ComputeDeltaE(labs[best], labs[i]);
+                var d = ColorMetrics.DeltaE76(labs[best], labs[i]);
                 if (d < minDistTo[i])
                     minDistTo[i] = d;
             }
         }
 
         return selected.Select(i => candidates[i]).ToList();
-    }
-
-
-    private static (double L, double a, double b) ConvertRgbToLab(byte r8, byte g8, byte b8)
-    {
-        var r = SrgbByteToLinear(r8);
-        var g = SrgbByteToLinear(g8);
-        var b = SrgbByteToLinear(b8);
-
-        // Convert linear RGB to XYZ (D65)
-        var x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375;
-        var y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750;
-        var z = r * 0.0193339 + g * 0.1191920 + b * 0.9503041;
-
-        // Normalize for D65 white point
-        var xn = x / 0.95047;
-        var yn = y / 1.00000;
-        var zn = z / 1.08883;
-
-        var fx = F(xn);
-        var fy = F(yn);
-        var fz = F(zn);
-
-        var l = 116.0 * fy - 16.0;
-        var a = 500.0 * (fx - fy);
-        var bLab = 200.0 * (fy - fz);
-
-        return (l, a, bLab);
-
-        double F(double t) => t > 0.008856 ? Math.Pow(t, 1.0 / 3.0) : (7.787037 * t + 16.0 / 116.0);
-    }
-
-    /// <summary>
-    /// Compute CIE76 Delta-E between two Lab values.
-    /// </summary>
-    private static double ComputeDeltaE((double L, double a, double b) lab1, (double L, double a, double b) lab2)
-    {
-        var dL = lab1.L - lab2.L;
-        var da = lab1.a - lab2.a;
-        var db = lab1.b - lab2.b;
-        return Math.Sqrt(dL * dL + da * da + db * db);
-    }
-
-    /// <summary>
-    /// Convert an sRGB byte component (0..255) to linear RGB (0..1).
-    /// </summary>
-    private static double SrgbByteToLinear(byte v)
-    {
-        var s = v / 255.0;
-        return s <= 0.04045 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
     }
 }

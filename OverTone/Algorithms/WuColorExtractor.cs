@@ -1,15 +1,16 @@
 using OverTone;
-using StbImageSharp;
 
 namespace OverTone.Algorithms;
 
 /// <summary>
 /// Implements Wu's color quantization algorithm (variance-based color cube splitting).
 /// Produces compact palettes that preserve dominant colors with good perceptual quality.
+/// Histogram-based, so memory stays bounded regardless of image size.
 /// </summary>
-public class WuColorExtractor : IColorPaletteExtractor
+public sealed class WuColorExtractor : ColorPaletteExtractorBase
 {
-    public PaletteAlgorithm Algorithm => PaletteAlgorithm.Wu;
+    /// <inheritdoc />
+    public override PaletteAlgorithm Algorithm => PaletteAlgorithm.Wu;
 
     // Number of bits per channel used for the internal histogram (5 gives 32 bins per channel).
     private const int BitsPerChannel = 5;
@@ -17,12 +18,10 @@ public class WuColorExtractor : IColorPaletteExtractor
     private const int TableSize = SideSize + 1; // 33 (for cumulative tables)
     private const int Shift = 8 - BitsPerChannel;
 
-    public async Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount)
+    /// <inheritdoc />
+    protected override List<ColorPalette> ExtractCore(byte[] rgba, int colorCount, int maxDegreeOfParallelism)
     {
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(colorCount);
-
-        var image = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
-        var pixels = image.Data;
+        var pixels = rgba;
 
         // Histogram and moment arrays (names chosen for clarity)
         const int tableCount = TableSize * TableSize * TableSize;
@@ -58,8 +57,7 @@ public class WuColorExtractor : IColorPaletteExtractor
         PerformSplitting(boxes, boxVariances, colorCount, histogramWeight, momentR, momentG, momentB, momentSquared);
 
         // Generate final palette entries from boxes
-        var palette = GeneratePaletteFromBoxes(boxes, histogramWeight, momentR, momentG, momentB, colorCount);
-        return await Task.FromResult(palette);
+        return GeneratePaletteFromBoxes(boxes, histogramWeight, momentR, momentG, momentB, colorCount);
     }
 
     /// <summary>
@@ -108,35 +106,50 @@ public class WuColorExtractor : IColorPaletteExtractor
     /// <param name="momentSquared">Sum-of-squares moments; updated in-place to cumulative moments.</param>
     private static void ComputeCumulativeMoments(int[] histogramWeight, int[] momentR, int[] momentG, int[] momentB, double[] momentSquared)
     {
+        // Build a true 3-D prefix sum so the 8-corner box query in Volume(...) is correct.
+        // For each r-plane we keep a per-b "area" running total that accumulates DOWN the g axis,
+        // while "line" accumulates along the b axis within the current (r, g) row. The final value
+        // adds the plane above (r - 1). Integrating all three axes is essential — accumulating only
+        // r and b (the previous behaviour) left the green axis un-summed and made every box query wrong.
         for (var r = 1; r <= SideSize; r++)
         {
+            var areaW = new int[TableSize];
+            var areaR = new int[TableSize];
+            var areaG = new int[TableSize];
+            var areaB = new int[TableSize];
+            var areaM2 = new double[TableSize];
+
             for (var g = 1; g <= SideSize; g++)
             {
-                var sumW = 0;
-                var sumR = 0;
-                var sumG = 0;
-                var sumB = 0;
-                var sumM2 = 0.0;
+                var lineW = 0;
+                var lineR = 0;
+                var lineG = 0;
+                var lineB = 0;
+                var lineM2 = 0.0;
 
                 for (var b = 1; b <= SideSize; b++)
                 {
                     var idx = Index(r, g, b);
 
-                    sumW += histogramWeight[idx];
-                    sumR += momentR[idx];
-                    sumG += momentG[idx];
-                    sumB += momentB[idx];
-                    sumM2 += momentSquared[idx];
+                    lineW += histogramWeight[idx];
+                    lineR += momentR[idx];
+                    lineG += momentG[idx];
+                    lineB += momentB[idx];
+                    lineM2 += momentSquared[idx];
+
+                    areaW[b] += lineW;
+                    areaR[b] += lineR;
+                    areaG[b] += lineG;
+                    areaB[b] += lineB;
+                    areaM2[b] += lineM2;
 
                     var prev = Index(r - 1, g, b);
 
-                    histogramWeight[idx] = histogramWeight[prev] + sumW;
-
-                    momentR[idx] = momentR[prev] + sumR;
-                    momentG[idx] = momentG[prev] + sumG;
-                    momentB[idx] = momentB[prev] + sumB;
-
-                    momentSquared[idx] = momentSquared[prev] + sumM2;
+                    histogramWeight[idx] = histogramWeight[prev] + areaW[b];
+                    momentR[idx] = momentR[prev] + areaR[b];
+                    momentG[idx] = momentG[prev] + areaG[b];
+                    momentB[idx] = momentB[prev] + areaB[b];
+                    momentSquared[idx] = momentSquared[prev] + areaM2[b];
                 }
             }
         }
@@ -202,13 +215,15 @@ public class WuColorExtractor : IColorPaletteExtractor
         {
             var box = boxes[i];
 
-            var wt = Volume(weight, box);
-
-            if (wt == 0)
-            {
-                palette.Add(new ColorPalette { R = 0, G = 0, B = 0, PixelCount = 0 });
+            // Splitting stops early when the image has fewer separable regions than requested,
+            // leaving trailing boxes unset (null). Empty boxes (wt == 0) carry no color. Skip both
+            // rather than dereferencing null (NRE) or emitting bogus (0,0,0) entries.
+            if (box is null)
                 continue;
-            }
+
+            var wt = Volume(weight, box);
+            if (wt == 0)
+                continue;
 
             var rsum = Volume(mr, box);
             var gsum = Volume(mg, box);
@@ -386,8 +401,10 @@ public class WuColorExtractor : IColorPaletteExtractor
                     var gsum2 = wholeG - gsum1;
                     var bsum2 = wholeB - bsum1;
 
-                    var score = (rsum1 * rsum1 + gsum1 * gsum1 + bsum1 * bsum1) / wr
-                                + (rsum2 * rsum2 + gsum2 * gsum2 + bsum2 * bsum2) / wr2;
+                    // Cast to double before squaring: channel sums reach hundreds of thousands, so
+                    // (sum * sum) overflows int and wrecks the split decision.
+                    var score = ((double)rsum1 * rsum1 + (double)gsum1 * gsum1 + (double)bsum1 * bsum1) / wr
+                                + ((double)rsum2 * rsum2 + (double)gsum2 * gsum2 + (double)bsum2 * bsum2) / wr2;
 
                     if (!(score > bestScore)) 
                         continue;
@@ -418,7 +435,8 @@ public class WuColorExtractor : IColorPaletteExtractor
                     var r1v = Volume(mr, box); var g1v = Volume(mg, box); var b1v = Volume(mb, box);
                     var r2v = wholeR - r1v; var g2v = wholeG - g1v; var b2v = wholeB - b1v;
 
-                    var score = (r1v * r1v + g1v * g1v + b1v * b1v) / w1 + (r2v * r2v + g2v * g2v + b2v * b2v) / w2;
+                    var score = ((double)r1v * r1v + (double)g1v * g1v + (double)b1v * b1v) / w1
+                                + ((double)r2v * r2v + (double)g2v * g2v + (double)b2v * b2v) / w2;
 
                     if (!(score > bestScore)) 
                         continue;
@@ -448,7 +466,8 @@ public class WuColorExtractor : IColorPaletteExtractor
                     var r1v = Volume(mr, box); var g1v = Volume(mg, box); var b1v = Volume(mb, box);
                     var r2v = wholeR - r1v; var g2v = wholeG - g1v; var b2v = wholeB - b1v;
 
-                    var score = (r1v * r1v + g1v * g1v + b1v * b1v) / w1 + (r2v * r2v + g2v * g2v + b2v * b2v) / w2;
+                    var score = ((double)r1v * r1v + (double)g1v * g1v + (double)b1v * b1v) / w1
+                                + ((double)r2v * r2v + (double)g2v * g2v + (double)b2v * b2v) / w2;
 
                     if (!(score > bestScore)) 
                         continue;

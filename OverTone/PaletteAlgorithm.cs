@@ -12,5 +12,4 @@ public enum PaletteAlgorithm
     Popularity,
     Wu,
     NeuQuant,
-    Dedupe,
 }

@@ -38,7 +38,7 @@ public class Octree
     /// to <paramref name="maxColors"/>. Nodes are merged from upper levels downward.
     /// </summary>
     /// <param name="maxColors">Maximum number of leaf nodes to retain.</param>
-    public void Reduce(byte maxColors)
+    public void Reduce(int maxColors)
     {
         // Merge nodes until leaf count <= maxColors
         var leaves = GetLeafCount();

@@ -1,5 +1,4 @@
 using OverTone;
-using StbImageSharp;
 
 namespace OverTone.Algorithms;
 
@@ -23,58 +22,35 @@ namespace OverTone.Algorithms;
 ///
 /// The implementation purposefully favors clarity and maintainability over micro-optimizations.
 /// </remarks>
-public class FuzzyCMeansColorExtractor : IColorPaletteExtractor
+public sealed class FuzzyCMeansColorExtractor : ColorPaletteExtractorBase
 {
-    public PaletteAlgorithm Algorithm => PaletteAlgorithm.FuzzyCMeans;
+    private const int MaxSamples = 10_000;
 
-    private readonly Random _random;
+    private readonly int _seed;
     private readonly int _maxIterations;
     private readonly double _fuzzinessFactor;
 
-    public FuzzyCMeansColorExtractor() : this(new Random(), 100, 2.0) { }
-
-    public FuzzyCMeansColorExtractor(Random random, int maxIterations, double fuzziness)
+    /// <summary>Creates the extractor with the given options (defaults when <c>null</c>).</summary>
+    public FuzzyCMeansColorExtractor(FuzzyCMeansOptions? options = null)
     {
-        _random = random ?? throw new ArgumentNullException(nameof(random));
-        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(maxIterations);
+        var o = options ?? new FuzzyCMeansOptions();
+        ArgumentOutOfRangeException.ThrowIfNegativeOrZero(o.MaxIterations);
+        if (o.Fuzziness <= 1.0)
+            throw new ArgumentOutOfRangeException(nameof(options), "Fuzziness (m) must be > 1.0");
 
-        if (fuzziness <= 1.0)
-            throw new ArgumentOutOfRangeException(nameof(fuzziness), "fuzziness (m) must be > 1.0");
-
-        _maxIterations = maxIterations;
-        _fuzzinessFactor = fuzziness;
+        _seed = o.Seed;
+        _maxIterations = o.MaxIterations;
+        _fuzzinessFactor = o.Fuzziness;
     }
 
-    /// <summary>
-    /// Loads image pixels and runs the Fuzzy C-Means algorithm to produce a palette.
-    /// Only non-transparent pixels are used. The colorCount parameter indicates how many
-    /// clusters (palette entries) to produce.
-    /// </summary>
-    public async Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount)
+    /// <inheritdoc />
+    public override PaletteAlgorithm Algorithm => PaletteAlgorithm.FuzzyCMeans;
+
+    /// <inheritdoc />
+    protected override List<ColorPalette> ExtractCore(byte[] rgba, int colorCount, int maxDegreeOfParallelism)
     {
-        var image = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
-        var pixels = image.Data;
-
-        // Collect visible pixels as RGB points. Using a descriptive name helps make the code
-        // easier to read during later processing.
-        var rgbPoints = new List<byte[]>();
-
-        for (var index = 0; index < pixels.Length; index += 4)
-        {
-            var red = pixels[index];
-            var green = pixels[index + 1];
-            var blue = pixels[index + 2];
-            var alpha = pixels[index + 3];
-
-            if (alpha > 128)
-                rgbPoints.Add([red, green, blue]);
-        }
-        if (rgbPoints.Count == 0)
-            throw new Exception("No visible pixels found on image");
-
-        var palette = RunFuzzyCMeans(rgbPoints, colorCount);
-
-        return await Task.FromResult(palette);
+        var rgbPoints = ExtractVisiblePixels(rgba, MaxSamples);
+        return RunFuzzyCMeans(rgbPoints, colorCount);
     }
 
     /// <summary>
@@ -88,8 +64,11 @@ public class FuzzyCMeansColorExtractor : IColorPaletteExtractor
     {
         var pointCount = points.Count;
 
+        // Fresh, fixed-seed generator per extraction → the same image yields the same palette.
+        var rng = new Random(_seed);
+
         // Initialize memberships (pointCount x clusterCount) with random normalized values.
-        var memberships = ClusteringHelpers.InitializeMemberships(pointCount, clusterCount, _random);
+        var memberships = ClusteringHelpers.InitializeMemberships(pointCount, clusterCount, rng);
 
         var centroids = new double[clusterCount][]; // each centroid is a double[3]
 
@@ -116,7 +95,7 @@ public class FuzzyCMeansColorExtractor : IColorPaletteExtractor
                 if (weightedSumDenominator == 0.0)
                 {
                     // fallback: pick a random data point as centroid
-                    var fallbackPoint = points[_random.Next(pointCount)];
+                    var fallbackPoint = points[rng.Next(pointCount)];
                     centroids[clusterIndex] = [fallbackPoint[0], fallbackPoint[1], fallbackPoint[2]];
                 }
                 else
@@ -175,6 +154,6 @@ public class FuzzyCMeansColorExtractor : IColorPaletteExtractor
         // of pixels using memberships^m (the same weighting used to compute centroids). We also
         // estimate a pixel count by summing memberships for that cluster.
 
-        return ClusteringHelpers.BuildPaletteFromMemberships(points, memberships, _fuzzinessFactor, _random);
+        return ClusteringHelpers.BuildPaletteFromMemberships(points, memberships, _fuzzinessFactor, rng);
     }
 }
