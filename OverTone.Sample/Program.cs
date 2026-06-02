@@ -1,5 +1,7 @@
 using System.Diagnostics;
 using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
 using OverTone.Processing;
 
 namespace OverTone.Sample;
@@ -65,21 +67,109 @@ internal static class Program
     // A loaded image, kept in memory so the user can re-extract and compare without reloading.
     private sealed record ImageSource(byte[] Data, string Label, string DefaultName);
 
+    // One algorithm's result within a "run all" comparison.
+    private sealed record AlgorithmRun(string Label, List<ColorPalette> Palette, double DeltaE, double ElapsedMs);
+
     // ── Entry point ───────────────────────────────────────────────────────────
     private static async Task Main(string[] args)
     {
         try { Console.OutputEncoding = Encoding.UTF8; }
         catch { /* some redirected/limited consoles reject this; ignore */ }
 
-        // Accept an image path or URL as a command-line argument (drag-drop / pipelines).
-        if (args.Length > 0 && !string.IsNullOrWhiteSpace(args[0]))
+        // --make-testcard [file]: write the built-in, known-palette test card and exit.
+        var makeIndex = Array.FindIndex(args, a => a is "--make-testcard");
+        if (makeIndex >= 0)
         {
-            var img = await LoadSource(args[0]);
+            var target = makeIndex + 1 < args.Length && !args[makeIndex + 1].StartsWith('-') ? args[makeIndex + 1] : null;
+            MakeTestCardFile(target);
+            return;
+        }
+
+        var (source, jsonRequested, jsonPath, colorCount) = ParseArgs(args);
+
+        // Non-interactive: run every algorithm and dump the results to JSON, then exit.
+        if (source is not null && jsonRequested)
+        {
+            await RunBatchJsonAsync(source, jsonPath, colorCount);
+            return;
+        }
+
+        // A bare image path/URL jumps straight into a session.
+        if (source is not null)
+        {
+            var img = await LoadSource(source);
             if (img is not null && await SessionLoop(img))
                 return;
         }
 
         await MainMenu();
+    }
+
+    // Parses: <image-path-or-url>  [--json [file]]  [--colors N]
+    private static (string? Source, bool Json, string? JsonPath, int ColorCount) ParseArgs(string[] args)
+    {
+        string? source = null;
+        string? jsonPath = null;
+        var json = false;
+        var colorCount = 6;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var a = args[i];
+            if (a is "--json" or "-j")
+            {
+                json = true;
+                if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                    jsonPath = args[++i];
+            }
+            else if ((a is "--colors" or "-c") && i + 1 < args.Length && int.TryParse(args[i + 1], out var n) && n > 0)
+            {
+                colorCount = n;
+                i++;
+            }
+            else if (!a.StartsWith('-') && source is null)
+            {
+                source = a;
+            }
+        }
+
+        return (source, json, jsonPath, colorCount);
+    }
+
+    // ── "Run all" → JSON (non-interactive, for gathering data) ───────────────────
+    private static async Task RunBatchJsonAsync(string source, string? jsonPath, int colorCount)
+    {
+        var img = await LoadSource(source);
+        if (img is null)
+            return; // LoadSource already reported the error
+
+        var results = await RunAllAsync(img, colorCount);
+        if (results.Count == 0)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} No algorithm produced a result.");
+            return;
+        }
+
+        var path = Path.GetFullPath(jsonPath ?? $"{img.DefaultName}.results.json");
+        WriteResultsJson(img, colorCount, results, path);
+        Console.WriteLine($"  {Fg(0, 230, 120, "✔")} Wrote {results.Count} algorithm results to {Dim(path)}");
+    }
+
+    // Writes the built-in test card to disk (default overtone-testcard.bmp) and prints its known palette.
+    private static void MakeTestCardFile(string? path)
+    {
+        var target = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "overtone-testcard.bmp" : path);
+        try
+        {
+            File.WriteAllBytes(target, TestCard.CreateBmp());
+            Console.WriteLine($"  {Fg(0, 230, 120, "✔")} Wrote the built-in test card to {Dim(target)}");
+            Console.WriteLine(Dim($"  {TestCard.Colors.Length} known colors: " +
+                string.Join("  ", TestCard.Colors.Select(c => $"#{c.R:X2}{c.G:X2}{c.B:X2}"))));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {ex.Message}");
+        }
     }
 
     // ── Main menu ───────────────────────────────────────────────────────────────
@@ -90,14 +180,17 @@ internal static class Program
             DrawBanner();
             Console.WriteLine($"  {Bold("1)")} Open image file");
             Console.WriteLine($"  {Bold("2)")} Load image from URL");
+            Console.WriteLine($"  {Bold("3)")} Use the built-in test card {Dim("(12 known colors)")}");
             Console.WriteLine($"  {Bold("q)")} Exit");
             Console.WriteLine();
-            Console.WriteLine(Dim("  Tip: pass an image path or URL as an argument to skip this menu."));
+            Console.WriteLine(Dim("  Tip: pass an image path/URL (or 'testcard') as an argument to skip this menu."));
+            Console.WriteLine(Dim("       Add --json [file] to run all algorithms and dump results; --colors N sets the size;"));
+            Console.WriteLine(Dim("       or --make-testcard [file] to save the test card as a .bmp."));
             Console.WriteLine();
 
             switch (Prompt("  Select › "))
             {
-                case null or "q" or "quit" or "3" or "exit":
+                case null or "q" or "quit" or "exit":
                     return;
                 case "1":
                 {
@@ -119,6 +212,13 @@ internal static class Program
                         if (img is not null && await SessionLoop(img))
                             return;
                     }
+                    break;
+                }
+                case "3":
+                {
+                    var img = await LoadSource("testcard");
+                    if (img is not null && await SessionLoop(img))
+                        return;
                     break;
                 }
             }
@@ -154,6 +254,11 @@ internal static class Program
     private static async Task<ImageSource?> LoadSource(string input)
     {
         var trimmed = input.Trim().Trim('"');
+
+        // Built-in, known-palette image — handy for gathering comparable data with a "right answer".
+        if (trimmed.Equals("testcard", StringComparison.OrdinalIgnoreCase))
+            return new ImageSource(TestCard.CreateBmp(), "test card (built-in · 12 known colors)", "testcard");
+
         var isUrl = Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
                     && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
 
@@ -244,16 +349,62 @@ internal static class Program
         var colorCount = int.TryParse(Prompt("  Number of colors [6] › "), out var cc) && cc > 0 ? cc : 6;
         Console.WriteLine();
 
-        var results = new List<(string Label, List<ColorPalette> Palette, double DeltaE)>();
+        var results = await RunAllAsync(img, colorCount);
+
+        Console.WriteLine();
+        Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
+        for (var i = 0; i < results.Count; i++)
+        {
+            var r = results[i];
+            var marker = i == 0 ? Fg(0, 230, 120, "★") : " ";
+            Console.WriteLine($"  {marker} {r.Label,-14} {Bold($"ΔE {r.DeltaE,6:F2}")}  {Dim($"{r.ElapsedMs,6:F0} ms")}  {RenderSwatches(r.Palette)}");
+        }
+        Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
+        Console.WriteLine(Dim("  ★ best (lowest mean ΔE) · ΔE ≈ how far each pixel sits from its nearest palette color"));
+        Console.WriteLine();
+
+        // Offer to save the full per-algorithm results (palettes + ΔE + timing) as JSON.
+        if (Prompt("  Save these results to JSON? [y/N] › ") is "y" or "Y" or "yes")
+        {
+            var defaultName = $"{img.DefaultName}.results";
+            var nameInput = Prompt($"  Output name [{defaultName}] › ");
+            var baseName = string.IsNullOrWhiteSpace(nameInput) ? defaultName : Sanitize(nameInput);
+            var path = Path.GetFullPath($"{baseName}.json");
+            try
+            {
+                WriteResultsJson(img, colorCount, results, path);
+                Console.WriteLine($"  {Fg(0, 230, 120, "✔")} Saved {Dim(path)}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {ex.Message}");
+            }
+            Console.WriteLine();
+        }
+
+        Pause();
+    }
+
+    // Runs every algorithm in CompareSet on the image, timing each (single-run wall-clock, incl. decode)
+    // and scoring it by mean ΔE. Results are returned sorted best-first.
+    private static async Task<List<AlgorithmRun>> RunAllAsync(ImageSource img, int colorCount)
+    {
+        var results = new List<AlgorithmRun>();
+
         foreach (var (algorithm, label) in CompareSet)
         {
             try
             {
+                var stopwatch = Stopwatch.StartNew();
                 var palette = await RunWithSpinner($"  {label}",
                     () => Generator.ExtractColorPaletteAsync(img.Data, colorCount, algorithm,
                         maxDegreeOfParallelism: Environment.ProcessorCount));
-                results.Add((label, palette, PaletteQuality.MeanDeltaE(img.Data, palette,
-                    maxDegreeOfParallelism: Environment.ProcessorCount)));
+                stopwatch.Stop();
+
+                var deltaE = PaletteQuality.MeanDeltaE(img.Data, palette,
+                    maxDegreeOfParallelism: Environment.ProcessorCount);
+
+                results.Add(new AlgorithmRun(label, palette, deltaE, stopwatch.Elapsed.TotalMilliseconds));
             }
             catch (Exception ex)
             {
@@ -262,19 +413,53 @@ internal static class Program
         }
 
         results.Sort((a, b) => a.DeltaE.CompareTo(b.DeltaE));
+        return results;
+    }
 
-        Console.WriteLine();
-        Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
-        for (var i = 0; i < results.Count; i++)
+    // Serializes the full comparison (every algorithm's palette + ΔE + timing) to a JSON file.
+    private static void WriteResultsJson(ImageSource img, int colorCount, List<AlgorithmRun> results, string path)
+    {
+        var root = new JsonObject
         {
-            var (label, palette, deltaE) = results[i];
-            var marker = i == 0 ? Fg(0, 230, 120, "★") : " ";
-            Console.WriteLine($"  {marker} {label,-14} {Bold($"ΔE {deltaE,6:F2}")}  {RenderSwatches(palette)}");
+            ["source"] = img.Label,
+            ["colorCount"] = colorCount,
+            ["selection"] = nameof(PaletteSelectionMode.Diverse),
+            ["generatedUtc"] = DateTime.UtcNow.ToString("o"),
+            ["note"] = "elapsedMs is single-run wall-clock including image decode; results are ranked by meanDeltaE (lower = closer to the image).",
+        };
+
+        var resultsArray = new JsonArray();
+        foreach (var run in results)
+        {
+            var totalPixels = run.Palette.Sum(p => (long)p.PixelCount);
+            var colors = new JsonArray();
+
+            foreach (var c in run.Palette)
+            {
+                var (h, s, l) = ToHsl(c.R, c.G, c.B);
+                colors.Add(new JsonObject
+                {
+                    ["hex"] = c.AsHex,
+                    ["rgb"] = new JsonArray { c.R, c.G, c.B },
+                    ["hsl"] = new JsonArray { h, s, l },
+                    ["name"] = ColorNaming.NearestName(c.R, c.G, c.B),
+                    ["pixelCount"] = c.PixelCount,
+                    ["percentage"] = totalPixels > 0 ? Math.Round(c.PixelCount * 100.0 / totalPixels, 2) : 0.0,
+                });
+            }
+
+            resultsArray.Add(new JsonObject
+            {
+                ["algorithm"] = run.Label,
+                ["meanDeltaE"] = Math.Round(run.DeltaE, 4),
+                ["elapsedMs"] = Math.Round(run.ElapsedMs, 2),
+                ["colorCount"] = run.Palette.Count,
+                ["colors"] = colors,
+            });
         }
-        Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
-        Console.WriteLine(Dim("  ★ best (lowest mean ΔE) · ΔE ≈ how far each pixel sits from its nearest palette color"));
-        Console.WriteLine();
-        Pause();
+
+        root["results"] = resultsArray;
+        File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
     }
 
     private static string RenderSwatches(IReadOnlyList<ColorPalette> palette)

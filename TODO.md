@@ -66,6 +66,29 @@ Tracked ideas, improvements, and known gaps. Items are grouped by area and loose
 
 ---
 
+## 🌈 Semantic & accessible palette generation
+
+Turn the extracted colors into a complete, ready-to-use UI palette — not just a list of swatches, but **named roles with accessible pairings and tonal ramps**. This is the "dynamic color from album art" idea (à la Material 3) and the highest-leverage feature for the music-player / theming use cases. A new `PaletteScheme` / `DesignTokens` model + builder would sit on top of the existing extractors.
+
+- [ ] **Semantic roles**  
+  Derive design-system roles from the extracted palette: `primary`, `secondary`, `tertiary`, plus `neutral` / `surface` / `background`, and status colors `success` / `warning` / `error` (alert) / `info`. Primary/secondary/tertiary come from the image's dominant + accent colors (builds on the Vibrant/Muted item); status colors are conventional hues (green / amber / red / blue), optionally harmonized toward the primary. Also emit the matching **"on" colors** (`onPrimary`, `onSurface`, …) — the text/icon color that sits on each role, chosen for contrast.
+
+- [ ] **Tonal scales (shade ramps)**  
+  For each role, generate a consistent ramp of tints/shades — e.g. Tailwind-style `50…950` or a Material-3 tonal palette — by varying *tone* in a perceptual space (OkLCh / HCT) rather than naive HSL, so the steps look evenly spaced. Reuses the planned OkLab work.
+
+- [ ] **WCAG contrast & accessibility**  
+  Add `ColorMetrics` helpers for WCAG **relative luminance** and **contrast ratio**, and verify each role/"on" pairing against the standard thresholds — **4.5:1** for normal text and **3:1** for large text & UI components (AA), **7:1** (AAA). Auto-select black vs white (or nudge the tone) so every pairing passes, and flag any that can't. Consider an **APCA** (WCAG 3 draft) mode as the modern perceptual alternative to the 2.x ratio.
+
+- [ ] **Harmony-based derivation**  
+  When an image yields too few distinct accents, synthesize secondary/tertiary from the primary via color-theory schemes — complementary, analogous, triadic, split-complementary — as hue rotations in OkLCh that hold chroma/tone.
+
+- [ ] **Token export**  
+  Emit the generated scheme through the existing exporters as design tokens: CSS custom properties, an SCSS map, and a Tailwind `theme.extend.colors` tree (role → shade → hex). Likely a new `IPaletteExporter` (or a dedicated builder) backed by the `PaletteScheme` model.
+
+Industry references to follow: **WCAG 2.2** contrast (relative-luminance formula, 4.5 / 3 / 7 ratios), **APCA** (WCAG 3 draft); **Material Design 3** (HCT color space, tonal palettes, dynamic color from a seed image); **Tailwind** numeric scales; **Radix Colors** / **IBM Carbon** (accessible stepped systems); and **Adobe Leonardo** (generate ramps to hit target contrast ratios).
+
+---
+
 ## 📦 Library API
 
 - [ ] **`IColorPaletteExtractor` — cancellation support**  

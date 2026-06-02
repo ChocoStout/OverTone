@@ -394,32 +394,45 @@ OverTone/
 
 ## Sample App
 
-`OverTone.Sample` is a Windows console app with a full ANSI-colored TUI:
+`OverTone.Sample` is a **cross-platform** console app (no WinForms dependency) with an ANSI-colored TUI:
 
 ```
   1) Open image file
   2) Load image from URL
-  3) Exit
+  3) Use the built-in test card (12 known colors)
+  q) Exit
 ```
 
-After picking a source the app lets you choose algorithm, color count, and (for NeuQuant) override neuron count / training iterations. Results are displayed as colored swatches with a percentage bar:
+Pick a source, then in the per-image session you can **extract** a palette (choosing algorithm, color count, and Diverse/Dominant mode), **compare** every algorithm ranked by mean ΔE (with timing), or open another image. Extraction shows swatches with hex / RGB / HSL / name and a share bar:
 
 ```
-  ██████  #2B4F82  Navy              ████████████████████░░░░░░░░  48.3%
-  ██████  #E8A23C  Orange            █████████████░░░░░░░░░░░░░░░  31.1%
+  ██████  #2B4F82  rgb( 43, 79,130)  hsl(215, 50%, 34%)  Dark Slate Blue  ████████░░  33.4%
+  ██████  #E8A23C  rgb(232,162, 60)  hsl( 38, 80%, 57%)  Orange           ████░░░░░░  17.1%
   ...
 ```
 
-When the results are on screen, the app offers to **export** the palette — pick a format (or `A` for all six) and it writes the files to the current directory.
+After results, the app offers to **export** the palette to any format (or `A` for all six).
 
-Run it:
+### Command-line use
+
+Pass a source to skip the menu — handy for scripting and gathering data:
 
 ```bash
-cd OverTone.Sample
-dotnet run
+# Extract interactively from a file or URL
+dotnet run --project OverTone.Sample -- path/to/image.png
+dotnet run --project OverTone.Sample -- https://example.com/cover.jpg
+
+# Run EVERY algorithm and dump the full comparison (palettes + mean ΔE + timing) to JSON
+dotnet run --project OverTone.Sample -- cover.jpg --json results.json --colors 8
+
+# Use the built-in known-palette test card (no file needed) — ideal for comparable data
+dotnet run --project OverTone.Sample -- testcard --json testcard.results.json
+
+# Save the test card image to disk for use elsewhere
+dotnet run --project OverTone.Sample -- --make-testcard testcard.bmp
 ```
 
-> **Windows only** — uses `OpenFileDialog` (WinForms) for the file picker.
+> Runs anywhere .NET 10 runs (Windows, macOS, Linux). On a plain terminal without truecolor ANSI it falls back to a simpler colored view.
 
 ---
 
