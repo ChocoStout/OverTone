@@ -2,6 +2,7 @@
 @rendermode InteractiveServer
 @using OverTone.Theming
 @inject PaletteGenerator Generator
+@inject IHttpClientFactory HttpFactory
 
 <h1>OverTone — Theme Builder</h1>
 <p class="sub">
@@ -16,6 +17,10 @@
     </label>
     <input type="text" @bind="_seedText" @bind:event="oninput" @bind:after="OnSeedText" />
     <label class="btn">From image…<InputFile OnChange="OnImage" accept="image/*" style="display:none" /></label>
+    <span class="url-group">
+        <input type="url" placeholder="https://… image URL" @bind="_url" @bind:event="oninput" />
+        <button class="btn" @onclick="LoadUrl" disabled="@(_busy || string.IsNullOrWhiteSpace(_url))">Load URL</button>
+    </span>
 
     <label>Harmony
         <select @bind="_harmony" @bind:after="Rebuild">
@@ -36,6 +41,14 @@
 @if (_error is not null)
 {
     <div class="error">@_error</div>
+}
+
+@if (_imageSrc is not null)
+{
+    <figure class="theme-source">
+        <img src="@_imageSrc" alt="seed image" />
+        <figcaption>Seed pulled from this image → <span class="src-hex">@_seed</span></figcaption>
+    </figure>
 }
 
 @if (_pair is not null)
@@ -74,6 +87,9 @@
 @code {
     private string _seed = "#285AD2";
     private string _seedText = "#285AD2";
+    private string _url = "";
+    private string? _imageSrc;
+    private bool _busy;
     private Harmony _harmony = Harmony.Analogous;
     private bool _ramps;
     private ThemeMode _mode = ThemeMode.Light;
@@ -87,6 +103,7 @@
     {
         _seed = e.Value?.ToString() ?? _seed;
         _seedText = _seed;
+        _imageSrc = null;
         Rebuild();
     }
 
@@ -95,6 +112,7 @@
         if (!string.IsNullOrWhiteSpace(_seedText))
         {
             _seed = _seedText.Trim();
+            _imageSrc = null;
             Rebuild();
         }
     }
@@ -102,23 +120,62 @@
     private async Task OnImage(InputFileChangeEventArgs e)
     {
         _error = null;
+        _busy = true;
         try
         {
             using var ms = new MemoryStream();
             await e.File.OpenReadStream(16L * 1024 * 1024).CopyToAsync(ms);
-            var palette = await Generator.GetColorsAsync(ms.ToArray(), 6);
-            if (palette.Count > 0)
-            {
-                _seed = palette[0].AsHex;
-                _seedText = _seed;
-                Rebuild();
-            }
+            var bytes = ms.ToArray();
+            await SeedFromImage(bytes, DataUrl(bytes, e.File.ContentType));
         }
         catch (Exception ex)
         {
             _error = ex.Message;
         }
+        finally
+        {
+            _busy = false;
+        }
     }
+
+    private async Task LoadUrl()
+    {
+        if (string.IsNullOrWhiteSpace(_url)) return;
+        _error = null;
+        _busy = true;
+        try
+        {
+            var client = HttpFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(30);
+            var bytes = await client.GetByteArrayAsync(_url.Trim());
+            await SeedFromImage(bytes, _url.Trim());   // the browser loads the URL directly for the preview
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't load that URL: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SeedFromImage(byte[] bytes, string previewSrc)
+    {
+        var palette = await Generator.GetColorsAsync(bytes, 6);
+        if (palette.Count == 0)
+        {
+            _error = "No colors could be extracted from that image.";
+            return;
+        }
+        _seed = palette[0].AsHex;
+        _seedText = _seed;
+        _imageSrc = previewSrc;
+        Rebuild();
+    }
+
+    private static string DataUrl(byte[] bytes, string? contentType)
+        => $"data:{(string.IsNullOrWhiteSpace(contentType) ? "image/png" : contentType)};base64,{Convert.ToBase64String(bytes)}";
 
     private void Rebuild()
     {
