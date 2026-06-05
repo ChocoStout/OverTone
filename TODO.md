@@ -4,6 +4,24 @@ Tracked ideas, improvements, and known gaps. Items are grouped by area and loose
 
 ---
 
+## 🧭 Design notes & product direction
+
+Captured from real-image experiments (Lena, TS *1989*). Context for the work below — especially palette generation.
+
+**Three different "palette" goals — don't conflate them.** Each planned feature serves exactly one:
+1. **Representative / dominant** — "the N main colors actually in the image," frequency-driven. What the planned `GetColors` returns by default. On a neutral-heavy image you get neutrals, because that's what the pixels *are*.
+2. **Salient / named** — "the colors a person would call out" (the blue, the red lipstick) even when they're a tiny fraction of pixels. Needs the **Vibrant/Muted** saliency path *or* **region-aware segmentation** (people name colors by *region* — sweatshirt, lips — see the segmentation item) — *not* global frequency.
+3. **Generated / harmonized** — a full, vivid, accessible scheme. The **semantic palette** work; it may *boost* saturation and synthesize roles, i.e. it doesn't just report what's in the image.
+
+**How the clustering math actually behaves (the mental model):**
+- It works in **color space, not image space** — pixel position is discarded. "Adjacent in the photo" is irrelevant; only "close in color" makes colors group.
+- A pixel joins its **nearest** cluster and each returned color is the **average** of its members, so averages **drift to dull midpoints**. A small blue region beside neutrals doesn't become teal — it becomes a muddy gray-blue (observed: `#292C37`) or gets absorbed into the nearest dark cluster. So vivid named accents *cannot* fall out of pure frequency clustering on a neutral-dominated image.
+- **Corollary:** extraction returns what's *in the pixels* — it can't manufacture saturation. A washed-out source yields a muted palette; guaranteed punch is the *harmonize* path (goal 3), not extraction.
+
+**`meanDeltaE` is the wrong objective for theming.** It measures how well a palette reconstructs the *majority* of pixels, so on a neutral-heavy image it rewards all-neutral palettes and ranks the *least* vibrant algorithm "best." Use it for reconstruction fidelity, not for choosing a theming palette (see the comparison-view follow-up).
+
+---
+
 ## 🎨 Algorithms
 
 - [x] **K-Means — smarter seeding**  
@@ -27,6 +45,9 @@ Tracked ideas, improvements, and known gaps. Items are grouped by area and loose
 - [ ] **Wu / Octree — 64-bit accumulators for huge images**  
   `WuColorExtractor`'s moment tables (and `Volume`) and `OctreeNode`'s per-node channel sums are `int[]`/`int`. Cumulative channel sums reach `pixelCount × 255`, which overflows above ~8 megapixels and corrupts results. Widen them to `long`. (Pixel subsampling for Median Cut / FCM is already handled by the base class; Octree and Wu are histogram-based, so only the accumulator width is at risk — not memory.)
 
+- [ ] **Octree — fix the broken reduction (high priority)**  
+  Confirmed badly broken on real photos: in the 1989 / Lena runs Octree returned 6–12 near-identical *near-black* colors with pixel counts of 1–3 and mean ΔE of **47–62** (vs ~5–11 for every other algorithm). The reduction's leaf accounting is approximate and collapses on images with many distinct colors — it returns the deepest, rarest leaves instead of the dominant merged buckets. Rewrite `Octree.Reduce` to merge only *reducible* nodes (all children are leaves), lowest-population first, decrementing the leaf count exactly. It's also slow (~11 s on a 512² image — no subsampling + a thrashing reduction). Until fixed, the planned `GetColors` API must not route to Octree.
+
 - [ ] **Large images — optional max-pixel guard & pluggable decoder**  
   Add an opt-in maximum-pixel limit that rejects absurdly large images before decode (decompression-bomb protection). Separately, an `IImageDecoder` seam would let callers plug in a RAW (CR2/NEF/ARW/DNG) or other decoder, since `StbImageSharp` cannot read camera RAW. See README → *Large images, RAW & memory* for current behaviour and guidance.
 
@@ -48,6 +69,14 @@ Tracked ideas, improvements, and known gaps. Items are grouped by area and loose
 - [ ] **New algorithm — K-Medoids (PAM)**  
   Like K-Means but cluster centers are *actual image pixels* rather than averages — guarantees palette colors that truly appear in the image (useful for LED output and "real swatch" use cases).
 
+- [ ] **Spatial / region-aware extraction (segmentation)** *(matches the "colors a person names" intent)*  
+  Every current extractor works in **color space only** — pixel position is discarded. To group by *region* ("the blue sweatshirt", "the red lips") rather than by global color frequency, bring spatial information in. A ladder from easiest to most capable:
+  - **5D K-Means** — cluster pixels as `(L, a, b, x, y)` instead of `(L, a, b)`, with a `spatialWeight` dial (0 = today's pure-color behavior; higher = spatially coherent blobs). Smallest change; reuses the existing K-Means.
+  - **SLIC superpixels** — the canonical color+space method (k-means in 5D with a spatially-localized search window + a compactness term). Produces compact regions; aggregate them into a palette weighted by area. *Mean Shift* in the joint color+spatial domain and *Felzenszwalb–Huttenlocher* graph segmentation are alternatives.
+  - **Region-based palette** — segmentation yields regions with (color, area, centroid). Take one representative color per major/distinct region → naturally surfaces *object* colors (sweatshirt, hair, background), which is **how people actually name colors**. Use a *peak* color per region (not the region mean) to keep saturation, and a saliency rank so a small-but-distinct region (lipstick) still makes the cut.
+  
+  Honest trade-offs: heavier than the histogram quantizers (5D, iterations); the region mean is still muted (a navy sweatshirt → muted navy, not vivid blue — use a peak pixel + the harmonize path for punch); and `spatialWeight`/compactness are dials, so the no-config `GetColors` would just pick sensible defaults. This is the family the original "the red region forms its own cluster" intuition was reaching for.
+
 ---
 
 ## 🔬 Post-processing
@@ -62,13 +91,16 @@ Tracked ideas, improvements, and known gaps. Items are grouped by area and loose
   `RemoveNearDuplicateByDeltaE` currently uses CIE76 (simple Euclidean Lab distance). Upgrade to CIEDE2000 for more perceptually accurate deduplication, especially in the blue region where CIE76 is known to be inaccurate.
 
 - [ ] **Vibrant / Muted swatch extraction (Android Palette-style)**  
-  A selection layer (not a quantizer) on top of any extractor that picks *semantic* swatches — Vibrant, Muted, Dark Vibrant, Light Vibrant, Dark Muted — by scoring candidates on HSL targets weighted by population. This is exactly how music apps theme their UI from album art, making it the highest-value addition for the music-player use case. Fits as a new `PaletteSelectionMode` (e.g. `Vibrant`) or a small dedicated swatch API.
+  A selection layer (not a quantizer) on top of any extractor that picks *semantic* swatches — Vibrant, Muted, Dark Vibrant, Light Vibrant, Dark Muted — by scoring candidates on HSL targets weighted by population. This is exactly how music apps theme their UI from album art, making it the highest-value addition for the music-player use case. Fits as a new `PaletteSelectionMode` (e.g. `Vibrant`) or a small dedicated swatch API. **Two musts (learned from the data):** (1) score by **saturation × population** so a small vivid region can beat a large dull one; (2) return a **representative/peak color, not the cluster mean** — averaging is precisely what desaturated the 1989 accents into muddy gray-blue in testing.
 
 ---
 
 ## 🌈 Semantic & accessible palette generation
 
 Turn the extracted colors into a complete, ready-to-use UI palette — not just a list of swatches, but **named roles with accessible pairings and tonal ramps**. This is the "dynamic color from album art" idea (à la Material 3) and the highest-leverage feature for the music-player / theming use cases. A new `PaletteScheme` / `DesignTokens` model + builder would sit on top of the existing extractors.
+
+- [ ] **One-call "main colors" API** *(the primary, no-config use case)*  
+  A dead-simple entry point — e.g. `OverTone.GetColors(image, n)` — that "just returns the N main colors," with the caller choosing **no algorithm, no selection mode, no ΔE**. Under the hood: a sensible default extractor → **perceptual de-duplication** (group near-duplicates in OkLab so you get *distinct* colors, not five shades of cream) → **true coverage** (assign every image pixel to its nearest returned color so the percentages are real and comparable across runs) → **semantic names**. For images with small-but-meaningful accents (album-art blue / red), blend in the saliency signal from the Vibrant/Muted item so minority colors aren't ranked out by frequency. This is the library's most common use case and is currently harder than it should be (today the caller must pick an algorithm + mode + count and interpret ΔE).
 
 - [ ] **Semantic roles**  
   Derive design-system roles from the extracted palette: `primary`, `secondary`, `tertiary`, plus `neutral` / `surface` / `background`, and status colors `success` / `warning` / `error` (alert) / `info`. Primary/secondary/tertiary come from the image's dominant + accent colors (builds on the Vibrant/Muted item); status colors are conventional hues (green / amber / red / blue), optionally harmonized toward the primary. Also emit the matching **"on" colors** (`onPrimary`, `onSurface`, …) — the text/icon color that sits on each role, chosen for contrast.
@@ -113,8 +145,8 @@ Industry references to follow: **WCAG 2.2** contrast (relative-luminance formula
 - [x] **Export palette to file**  
   Done — export is now a first-class library feature (`PaletteExporter` / `IPaletteExporter`), not just a sample-app convenience. Ships JSON, hex list, C/Arduino array, CSS, SCSS, and Tailwind; the sample app offers an export menu after displaying results. Design-tool formats (GIMP/Adobe `.gpl`, `.ase`, SVG) and mobile (Android `colors.xml`, iOS) are not yet implemented — add one by dropping in a new `IPaletteExporter`.
 
-- [ ] **Side-by-side algorithm comparison**  
-  Add a mode that runs all (or selected) algorithms on the same image and prints the results in a table so the user can compare quality at a glance.
+- [x] **Side-by-side algorithm comparison**  
+  Done — the sample's "Compare" view runs every algorithm on one image, ranks by mean ΔE, and shows swatches + timing; also exportable via "run all → JSON" (`--json`). **Follow-up:** ranking on ΔE *alone* is misleading for theming — it favors neutral-heavy palettes (see Design notes), so surface a **vibrancy / coverage** signal next to ΔE so "best" reflects the user's goal, not just reconstruction error.
 
 - [ ] **Drag-and-drop support**  
   Accept a file path as a command-line argument (`OverTone.Sample path/to/image.png`) so the app can be used as a shell drop target or integrated into build pipelines.
