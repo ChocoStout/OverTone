@@ -3,6 +3,7 @@ using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
 using OverTone.Processing;
+using OverTone.Theming;
 
 namespace OverTone.Sample;
 
@@ -73,6 +74,17 @@ internal static class Program
         {
             var target = makeIndex + 1 < args.Length && !args[makeIndex + 1].StartsWith('-') ? args[makeIndex + 1] : null;
             MakeTestCardFile(target);
+            return;
+        }
+
+        // --theme #RRGGBB: synthesize and print a light/dark accessible CSS theme, then exit.
+        var themeIndex = Array.FindIndex(args, a => a is "--theme");
+        if (themeIndex >= 0)
+        {
+            var seed = themeIndex + 1 < args.Length && !args[themeIndex + 1].StartsWith('-')
+                ? args[themeIndex + 1]
+                : "#285AD2";
+            PrintTheme(seed);
             return;
         }
 
@@ -163,6 +175,43 @@ internal static class Program
         }
     }
 
+    // Synthesizes a light + dark accessible theme from a seed color and prints it (demonstrates OverTone.Theming).
+    private static void PrintTheme(string seedHex)
+    {
+        ThemePair pair;
+        try
+        {
+            pair = ColorScheme.BuildThemePair(seedHex);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {ex.Message}");
+            return;
+        }
+
+        foreach (var (label, scheme) in new[] { ("Light", pair.Light), ("Dark", pair.Dark) })
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  {Bold(label + " scheme")} {Dim("· seed " + seedHex)}");
+            PrintRole("primary", scheme.Primary, scheme.OnPrimary);
+            PrintRole("secondary", scheme.Secondary, scheme.OnSecondary);
+            PrintRole("tertiary", scheme.Tertiary, scheme.OnTertiary);
+            PrintRole("surface", scheme.Surface, scheme.OnSurface);
+            PrintRole("error", scheme.Error, scheme.OnError);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(pair.AsCss());
+    }
+
+    private static void PrintRole(string name, Rgb color, Rgb on)
+    {
+        var swatch = AnsiSupported
+            ? $"\e[48;2;{color.R};{color.G};{color.B}m\e[38;2;{on.R};{on.G};{on.B}m  Aa  \e[0m"
+            : $"[{color.Hex}/{on.Hex}]";
+        Console.WriteLine($"    {swatch}  {name,-10} {color.Hex}  {Dim("on " + on.Hex)}");
+    }
+
     // ── Main menu ───────────────────────────────────────────────────────────────
     private static async Task MainMenu()
     {
@@ -176,7 +225,7 @@ internal static class Program
             Console.WriteLine();
             Console.WriteLine(Dim("  Tip: pass an image path/URL (or 'testcard') as an argument to skip this menu."));
             Console.WriteLine(Dim("       Add --json [file] to run all algorithms and dump results; --colors N sets the size;"));
-            Console.WriteLine(Dim("       or --make-testcard [file] to save the test card as a .bmp."));
+            Console.WriteLine(Dim("       --make-testcard [file] to save the test card; or --theme #RRGGBB for a CSS theme."));
             Console.WriteLine();
 
             switch (Prompt("  Select › "))

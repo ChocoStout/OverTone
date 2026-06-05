@@ -148,6 +148,135 @@ public static class ColorMetrics
         return Math.Sqrt(a * a + bb * bb);
     }
 
+    /// <summary>Converts an sRGB color to OkLCh — lightness, chroma, and hue in degrees (0..360).</summary>
+    public static (double L, double C, double h) RgbToOkLch(byte r, byte g, byte b)
+    {
+        var (l, a, bb) = RgbToOkLab(r, g, b);
+        var c = Math.Sqrt(a * a + bb * bb);
+        var h = Math.Atan2(bb, a) * 180.0 / Math.PI;
+        if (h < 0) h += 360.0;
+        return (l, c, h);
+    }
+
+    /// <summary>
+    /// Converts OkLCh back to an sRGB color, gamut-mapping by reducing chroma (holding lightness and hue)
+    /// until the color fits sRGB — so synthesized colors keep their hue and lightness instead of
+    /// distorting, which a naive per-channel clamp would cause.
+    /// </summary>
+    public static (byte R, byte G, byte B) OkLchToRgb(double l, double c, double h)
+    {
+        c = GamutMapChroma(l, c, h);
+        var hr = h * Math.PI / 180.0;
+        return OkLabToRgb(l, c * Math.Cos(hr), c * Math.Sin(hr));
+    }
+
+    /// <summary>
+    /// Returns the largest chroma ≤ <paramref name="c"/> that keeps the color <c>(L, ·, h)</c> inside the
+    /// sRGB gamut, via binary search. Hue and lightness are preserved exactly; only colorfulness yields.
+    /// </summary>
+    public static double GamutMapChroma(double l, double c, double h)
+    {
+        var hr = h * Math.PI / 180.0;
+        double cos = Math.Cos(hr), sin = Math.Sin(hr);
+        if (InGamut(l, c * cos, c * sin)) return c;
+
+        double lo = 0.0, hi = c;
+        for (var i = 0; i < 24; i++)
+        {
+            var mid = (lo + hi) / 2.0;
+            if (InGamut(l, mid * cos, mid * sin)) lo = mid; else hi = mid;
+        }
+        return lo;
+    }
+
+    /// <summary>Converts an OkLab value to an sRGB color (each channel clamped into range).</summary>
+    public static (byte R, byte G, byte B) OkLabToRgb(double l, double a, double b)
+    {
+        var (lr, lg, lb) = OkLabToLinear(l, a, b);
+        return (LinearToSrgbByte(lr), LinearToSrgbByte(lg), LinearToSrgbByte(lb));
+    }
+
+    /// <summary>WCAG relative luminance (0..1) of an sRGB color.</summary>
+    public static double RelativeLuminance(byte r, byte g, byte b)
+        => 0.2126 * SrgbByteToLinear(r) + 0.7152 * SrgbByteToLinear(g) + 0.0722 * SrgbByteToLinear(b);
+
+    /// <summary>WCAG contrast ratio (1..21) between two sRGB colors.</summary>
+    public static double ContrastRatio(byte r1, byte g1, byte b1, byte r2, byte g2, byte b2)
+    {
+        var l1 = RelativeLuminance(r1, g1, b1);
+        var l2 = RelativeLuminance(r2, g2, b2);
+        var hi = Math.Max(l1, l2);
+        var lo = Math.Min(l1, l2);
+        return (hi + 0.05) / (lo + 0.05);
+    }
+
+    /// <summary>Returns black or white — whichever has the higher WCAG contrast against the background.</summary>
+    public static (byte R, byte G, byte B) BestOnColor(byte r, byte g, byte b)
+        => ContrastRatio(255, 255, 255, r, g, b) >= ContrastRatio(0, 0, 0, r, g, b)
+            ? ((byte)255, (byte)255, (byte)255)
+            : ((byte)0, (byte)0, (byte)0);
+
+    /// <summary>
+    /// Adjusts a foreground color's lightness (holding its hue and chroma) until it meets a target WCAG
+    /// contrast ratio against the background. Contrast versus lightness is <em>V-shaped</em> against
+    /// mid-tone backgrounds, so both directions are searched and the lightness nearest the original wins;
+    /// if neither side reaches the target within the gamut, falls back to <see cref="BestOnColor"/>.
+    /// </summary>
+    public static (byte R, byte G, byte B) EnsureContrast(
+        byte fr, byte fg, byte fb, byte br, byte bg, byte bb, double target)
+    {
+        var (l0, c, h) = RgbToOkLch(fr, fg, fb);
+
+        double? up = null, down = null;
+        for (var l = l0; l <= 1.0; l += 0.01)
+        {
+            var (r, g, b) = OkLchToRgb(l, c, h);
+            if (ContrastRatio(r, g, b, br, bg, bb) >= target) { up = l; break; }
+        }
+        for (var l = l0; l >= 0.0; l -= 0.01)
+        {
+            var (r, g, b) = OkLchToRgb(l, c, h);
+            if (ContrastRatio(r, g, b, br, bg, bb) >= target) { down = l; break; }
+        }
+
+        double chosen;
+        if (up is { } u && down is { } d) chosen = u - l0 <= l0 - d ? u : d;
+        else if (up is { } u2) chosen = u2;
+        else if (down is { } d2) chosen = d2;
+        else return BestOnColor(br, bg, bb);
+
+        return OkLchToRgb(chosen, c, h);
+    }
+
+    /// <summary>
+    /// Converts an OkLab value to linear RGB (0..1, unclamped) using Ottosson's inverse matrices.
+    /// </summary>
+    private static (double R, double G, double B) OkLabToLinear(double l, double a, double b)
+    {
+        var lp = l + 0.3963377774 * a + 0.2158037573 * b;
+        var mp = l - 0.1055613458 * a - 0.0638541728 * b;
+        var sp = l - 0.0894841775 * a - 1.2914855480 * b;
+
+        var lc = lp * lp * lp;
+        var mc = mp * mp * mp;
+        var sc = sp * sp * sp;
+
+        return (
+            4.0767416621 * lc - 3.3077115913 * mc + 0.2309699292 * sc,
+            -1.2684380046 * lc + 2.6097574011 * mc - 0.3413193965 * sc,
+            -0.0041960863 * lc - 0.7034186147 * mc + 1.7076147010 * sc);
+    }
+
+    /// <summary>True when the OkLab value lies inside the sRGB gamut (all linear channels in [0,1]).</summary>
+    private static bool InGamut(double l, double a, double b)
+    {
+        var (lr, lg, lb) = OkLabToLinear(l, a, b);
+        const double eps = 1e-4;
+        return lr >= -eps && lr <= 1 + eps
+            && lg >= -eps && lg <= 1 + eps
+            && lb >= -eps && lb <= 1 + eps;
+    }
+
     /// <summary>
     /// Converts an sRGB byte component (0..255) to linear RGB (0..1).
     /// </summary>
@@ -155,5 +284,13 @@ public static class ColorMetrics
     {
         var s = v / 255.0;
         return s <= 0.04045 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+    }
+
+    /// <summary>Converts a linear-RGB channel (0..1) to an sRGB byte (0..255), clamped into range.</summary>
+    private static byte LinearToSrgbByte(double c)
+    {
+        c = Math.Clamp(c, 0.0, 1.0);
+        var s = c <= 0.0031308 ? c * 12.92 : 1.055 * Math.Pow(c, 1.0 / 2.4) - 0.055;
+        return (byte)Math.Round(Math.Clamp(s, 0.0, 1.0) * 255.0);
     }
 }
