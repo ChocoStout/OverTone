@@ -3,6 +3,7 @@
 @using System.Diagnostics
 @using System.Globalization
 @inject PaletteGenerator Generator
+@inject IHttpClientFactory HttpFactory
 
 <h1>OverTone — Palette Explorer</h1>
 <p class="sub">
@@ -15,7 +16,12 @@
         Choose image…
         <InputFile OnChange="OnFile" accept="image/*" style="display:none" />
     </label>
-    <button class="btn" @onclick="UseTestCard">Use test card</button>
+    <button id="btn-testcard" class="btn" @onclick="UseTestCard">Use test card</button>
+
+    <span class="url-group">
+        <input type="url" placeholder="https://… image URL" @bind="_url" @bind:event="oninput" />
+        <button class="btn" @onclick="LoadUrl" disabled="@(_busy || string.IsNullOrWhiteSpace(_url))">Load URL</button>
+    </span>
 
     <label>Colors
         <input type="number" min="2" max="24" @bind="_colorCount" />
@@ -31,7 +37,7 @@
         </select>
     </label>
 
-    <button class="btn primary" @onclick="Run" disabled="@(_imageBytes is null || _busy)">
+    <button id="btn-extract" class="btn primary" @onclick="Run" disabled="@(_imageBytes is null || _busy)">
         @(_busy ? "Working…" : "Extract")
     </button>
 </div>
@@ -96,6 +102,7 @@ else
     private string _fileName = "";
     private int _colorCount = 6;
     private string _method = "GetColors";
+    private string _url = "";
 
     private List<ColorPalette>? _palette;
     private long _total;
@@ -139,6 +146,31 @@ else
         _fileName = "Built-in test card · 12 known colors";
         _imageDataUrl = $"data:image/bmp;base64,{Convert.ToBase64String(_imageBytes)}";
         await Run();
+    }
+
+    private async Task LoadUrl()
+    {
+        if (string.IsNullOrWhiteSpace(_url))
+            return;
+
+        _error = null;
+        _palette = null;
+        _busy = true;
+        try
+        {
+            var client = HttpFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(30);
+            _imageBytes = await client.GetByteArrayAsync(_url.Trim());
+            _fileName = _url.Trim();
+            _imageDataUrl = _url.Trim();   // the browser loads the image directly for the preview
+            await Run();                    // resets _busy in its finally
+        }
+        catch (Exception ex)
+        {
+            _busy = false;
+            _imageBytes = null;
+            _error = $"Couldn't load that URL: {ex.Message}";
+        }
     }
 
     private async Task Run()

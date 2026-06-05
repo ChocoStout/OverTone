@@ -13,8 +13,10 @@
         .sub { margin: 0 0 1.5rem; color: #666; max-width: 60ch; }
         .controls { display: flex; flex-wrap: wrap; gap: .75rem; align-items: center; margin-bottom: 1.25rem; }
         .controls label { display: inline-flex; gap: .4rem; align-items: center; font-size: .9rem; }
-        .controls select, .controls input[type=number] { border: 1px solid #ccc; border-radius: 6px; padding: .35rem .5rem; }
+        .controls select, .controls input[type=number], .controls input[type=url] { border: 1px solid #ccc; border-radius: 6px; padding: .35rem .5rem; }
         .controls input[type=number] { width: 4rem; }
+        .controls input[type=url] { width: 15rem; }
+        .url-group { display: inline-flex; gap: .4rem; align-items: center; }
         .btn { border: 1px solid #ccc; background: #fff; border-radius: 6px; padding: .45rem .8rem; cursor: pointer; font-size: .9rem; }
         .btn.primary { background: #285ad2; color: #fff; border-color: #285ad2; }
         .btn:disabled { opacity: .5; cursor: default; }
