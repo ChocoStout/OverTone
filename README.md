@@ -15,7 +15,7 @@
 [![NuGet](https://img.shields.io/nuget/v/OverTone?logo=nuget)](https://www.nuget.org/packages/OverTone)
 [![Build](https://img.shields.io/github/actions/workflow/status/ChocoStout/OverTone/build.yml?logo=github)](https://github.com/ChocoStout/OverTone/actions)
 
-Extract beautiful, perceptually distinct color palettes from any image — local file or URL — using eight production-ready quantization algorithms.
+Extract beautiful, region-aware color palettes from any image — local file or URL — using **image-space segmentation** (SLIC superpixels and spatial 5D K-Means). One call, no tuning: `Palette.GetColorsAsync(image, n)`.
 
 [Getting Started](#getting-started) · [Algorithms](#algorithms) · [Tuning](#selection-modes--tuning) · [API Reference](#api-reference) · [Exports](#exports) · [Sample App](#sample-app) · [Contributing](#contributing) · [Roadmap](TODO.md)
 
@@ -27,15 +27,16 @@ Extract beautiful, perceptually distinct color palettes from any image — local
 
 | | |
 |---|---|
-| 🎨 **8 algorithms** | K-Means, Median Cut, Octree, Fuzzy C-Means, Popularity, Wu, NeuQuant, NeuQuant (Iterative) |
+| 🧩 **Image-space (region-aware)** | Colors come from *regions* — SLIC superpixels merged by color, or spatial 5D K-Means — so objects drive the palette, not just the global histogram |
+| 🎯 **One-call `GetColors`** | `Palette.GetColorsAsync(image, n)` — no algorithm, mode, or threshold to pick; distinct colors with honest coverage |
+| 🌈 **Peak, not mean** | Each region contributes its *representative* (peak) color, so vivid accents stay vivid instead of averaging to mud |
+| 🧠 **Selectable narrowing** | `Salient` (chroma × area), `Diverse` (farthest-point CIELAB), or `Dominant` |
 | 🌐 **URL + file support** | Pass a local path or any HTTP/HTTPS image URL |
-| 🧠 **Selectable post-processing** | `Diverse` (farthest-point CIELAB) or `Dominant` modes — tune which colors surface, and score results with mean ΔE |
 | ⚡ **Async-first** | Every extractor is `async Task` from top to bottom |
-| 🔌 **Extensible** | Implement `IColorPaletteExtractor` and `PaletteGenerator` discovers it automatically via reflection |
-| 📦 **Zero BCL extras** | Only dependency is `StbImageSharp` for image decoding |
+| 📦 **Dependency-free core** | Only dependency is `StbImageSharp` for decoding; the DI glue lives in a separate package |
 | 📤 **6 export formats** | JSON, hex list, C/Arduino array, CSS, SCSS, Tailwind — add your own via `IPaletteExporter` |
 | 🛡️ **Validated input** | Image magic bytes are checked before decoding — mislabeled or hostile files are rejected, not parsed |
-| 🧵 **Optional parallelism** | `maxDegreeOfParallelism` parallelizes K-Means with bit-identical results |
+| 🧵 **Optional parallelism** | `maxDegreeOfParallelism` parallelizes the spatial extractors with bit-identical results |
 
 ---
 
@@ -52,20 +53,19 @@ dotnet add package OverTone
 ```csharp
 using OverTone;
 
+// The simplest path: the N main colors of an image. No algorithm or settings to choose.
+var colors = await Palette.GetColorsAsync("photo.jpg", colorCount: 6);
+foreach (var color in colors)
+    Console.WriteLine($"{color.AsHex}  ({color.PixelCount:N0} px)");
+
+// Need control? Use PaletteGenerator directly and pick the algorithm + selection mode.
 var generator = new PaletteGenerator();
-
-// From a file
-var palette = await generator.ExtractColorPaletteAsync("photo.jpg", colorCount: 6);
-
-// From a URL
 var palette = await generator.ExtractColorPaletteAsync(
-    "https://example.com/image.png",
+    "https://example.com/cover.png",
     colorCount: 8,
     isUrl: true,
-    algorithm: PaletteAlgorithm.Wu);
-
-foreach (var color in palette)
-    Console.WriteLine($"{color.AsHex}  ({color.PixelCount:N0} px)");
+    algorithm: PaletteAlgorithm.Slic,
+    selection: PaletteSelectionMode.Salient);
 ```
 
 ### Output
@@ -83,21 +83,20 @@ foreach (var color in palette)
 
 ## Algorithms
 
-| # | Algorithm | Best for | Notes |
-|---|-----------|----------|-------|
-| 1 | **K-Means** | Accurate dominant colors | k-means++ seeding, stride-sampled to ≤ 10 k pixels; fully deterministic |
-| 2 | **Median Cut** | Fast, consistent palettes | Classic Heckbert split on widest channel |
-| 3 | **Octree** | Memory-efficient quantization | Tree pruning keeps peak memory bounded |
-| 4 | **Fuzzy C-Means** | Soft cluster membership | Slower but smooth color transitions |
-| 5 | **Popularity** | Exact most-frequent colors | Histogram-based; instant on any image |
-| 6 | **Wu** | Perceptual quality, sharp palettes | Variance-minimising cube split (Xiaolin Wu 1992) |
-| 7 | **NeuQuant** | Neural competitive learning | Auto-scales neurons + iterations per color count |
-| 8 | **NeuQuant (Iterative)** | Distinct colors, no near-duplicates | Same as NeuQuant with Delta-E dedup pass |
+OverTone works in **image space**: pixel position participates in clustering, so a palette reflects the image's *regions* (a sweatshirt, the sky, the lips) rather than just its global color histogram.
 
-All algorithms feed into a shared **perceptual post-processing** stage, selected via `PaletteSelectionMode`:
+| Algorithm | How it works | Best for |
+|-----------|--------------|----------|
+| **SLIC** (`Slic`, default) | SLIC superpixels in the joint color+space domain, merged into regions by color similarity; each region contributes its representative (peak) color, weighted by area | The recommended general-purpose choice — region-aware and accent-preserving |
+| **Spatial K-Means** (`SpatialKMeans`) | 5D K-Means on `(L, a, b, x, y)` with a `SpatialWeight` dial (`0` = classic color-space K-Means) | A simpler spatial clusterer; `SpatialWeight = 0` reproduces legacy color clustering |
 
-- **`Diverse`** (default) — 5× candidate pool → greedy farthest-point selection in CIELAB space; spreads picks across the chromatic range so accent colors surface
-- **`Dominant`** — 4× candidate pool → Delta-E (CIE76) near-duplicate removal; keeps the most frequent colors in roughly their proportions
+Both emit a **representative (peak) color per region — never the desaturated mean** — then feed a shared selection stage (`PaletteSelectionMode`):
+
+- **`Salient`** — ranks by *saliency* (chroma × area) so a small vivid region survives against a large dull one, with a neutral floor so a dominant black/white still shows. The default for `GetColors`.
+- **`Diverse`** (default for `ExtractColorPaletteAsync`) — greedy farthest-point selection in CIELAB; spreads picks across the chromatic range.
+- **`Dominant`** — the most frequent colors in roughly their proportions, near-duplicates merged.
+
+> **Honest expectations.** A region's color is its *actual* peak color — vivid when the region is vivid, muted when it's muted. Extraction reports what's in the pixels; it can't manufacture saturation (a guaranteed-vivid synthesized theme is the future *harmonize* path — see the [roadmap](TODO.md)). Segmentation is heavier than a histogram count, so large images are box-downscaled first; results are deterministic.
 
 See [Selection modes & tuning](#selection-modes--tuning) for when to use each and how to measure quality.
 
@@ -109,20 +108,21 @@ Every algorithm produces a large candidate pool that's narrowed down to your req
 
 | Mode | What you get | Best for |
 |------|--------------|----------|
-| **`Diverse`** (default) | Colors spread across the image's chromatic range (farthest-point in CIELAB), seeded with the dominant color | "Designer" palettes that surface accent colors, even small ones |
+| **`Salient`** | Colors ranked by chroma × area — a small vivid accent can outrank a large dull region, and a dominant neutral still shows | "The colors a person would name"; the `GetColors` default |
+| **`Diverse`** (default) | Colors spread across the image's chromatic range (farthest-point in CIELAB) | Varied "designer" palettes |
 | **`Dominant`** | The most frequent colors in roughly their proportions, near-duplicates merged | The literal main colors of a photo |
 
 ```csharp
-// Surface the accent colors (default)
+// "The colors a person would name" — small vivid accents survive
 var vivid = await generator.ExtractColorPaletteAsync("cover.jpg", 5,
-    selection: PaletteSelectionMode.Diverse);
+    selection: PaletteSelectionMode.Salient);
 
 // Just the most common colors
 var main = await generator.ExtractColorPaletteAsync("cover.jpg", 5,
     selection: PaletteSelectionMode.Dominant);
 ```
 
-> K-Means uses **k-means++** seeding with a fixed seed: results are deterministic, and small chromatically-distinct regions (logos, accents) get a fair chance to form their own cluster instead of being swallowed by a dominant background.
+> Results are **deterministic**: SLIC uses regular-grid seeds and a fixed iteration count; spatial K-Means uses k-means++ with a fixed seed; and both pair a parallel assignment step with a sequential (order-independent) center update — so the palette is identical regardless of `maxDegreeOfParallelism`.
 
 ### Measuring quality
 
@@ -147,10 +147,9 @@ Lena is retired; for reproducible tuning prefer:
 
 OverTone keeps runtime and memory bounded on big inputs — here's how it behaves and what to watch for:
 
-- **Pixel sampling.** K-Means, Median Cut, and Fuzzy C-Means stride-sample visible pixels down to ≤ 10k before clustering, so their runtime is independent of resolution. Octree, Popularity, and Wu are histogram-based — their memory is fixed by the histogram size no matter how many pixels you feed them.
+- **Working resolution.** The spatial extractors box-downscale the image to ≈180k pixels (area-averaged, so small accents aren't aliased away) before segmenting, so runtime is bounded regardless of input size. Tune via `SlicOptions.MaxPixels` / `SpatialKMeansOptions.MaxPixels`.
 - **Decode memory.** The decoder (`StbImageSharp`) expands the whole image into an RGBA buffer (a 60-megapixel photo ≈ 240 MB). On memory-constrained targets, **downscale before** handing the image to OverTone.
-- **Accumulator width (planned).** Wu's moment tables and Octree's per-node channel sums are currently `int`; their cumulative sums (`pixelCount × 255`) overflow above ~8 megapixels. These are being widened to `long` so very large images stay correct — K-Means and Median Cut already use 64-bit sums. ([Roadmap](TODO.md).)
-- **RAW camera files are not supported.** The decoder reads PNG, JPEG, GIF, BMP, PSD, HDR, and PNM — **not** camera RAW (CR2/NEF/ARW/DNG). The magic-byte validator rejects RAW (and any non-image) before decoding, so **convert RAW to PNG/TIFF/JPEG first**. A pluggable `IImageDecoder` seam for RAW and other formats is a possible future addition.
+- **RAW camera files are not supported.** The decoder reads PNG, JPEG, GIF, BMP, PSD, HDR, and PNM — **not** camera RAW (CR2/NEF/ARW/DNG). The magic-byte validator rejects RAW (and any non-image) before decoding, so **convert RAW to PNG/TIFF/JPEG first**. A pluggable `IImageDecoder` seam for RAW is a possible future addition.
 - **Decompression-bomb guard (planned).** An optional maximum-pixel limit can reject absurdly large images before decode.
 
 ---
@@ -162,22 +161,30 @@ OverTone keeps runtime and memory bounded on big inputs — here's how it behave
 ```csharp
 public class PaletteGenerator
 {
+    // No-config entry point: the N main colors, region-aware and accent-preserving.
+    public Task<List<ColorPalette>> GetColorsAsync(
+        byte[] imageData, int colorCount = 6, int maxDegreeOfParallelism = 1);
+    public Task<List<ColorPalette>> GetColorsAsync(
+        string source, int colorCount = 6, bool isUrl = false, int maxDegreeOfParallelism = 1);
+
+    // Full control: choose the algorithm and selection mode.
     public Task<List<ColorPalette>> ExtractColorPaletteAsync(
         string source,
         int    colorCount,
         bool   isUrl                              = false,
-        PaletteAlgorithm     algorithm            = PaletteAlgorithm.KMeans,
+        PaletteAlgorithm     algorithm            = PaletteAlgorithm.Slic,
         PaletteSelectionMode selection            = PaletteSelectionMode.Diverse,
-        NeuQuantOptions?     neuQuantOptions       = null,
         int?                 candidatePoolMultiplier = null,
         double               minDeltaE            = 12.0,
         int                  maxDegreeOfParallelism = 1);
 
-    // Same options, but extracts from an in-memory image you already hold
-    // (album art, a decoded frame, an upload) — avoids a redundant read.
+    // Same options, from in-memory bytes you already hold.
     public Task<List<ColorPalette>> ExtractColorPaletteAsync(
         byte[] imageData, int colorCount, /* …same optional parameters… */ );
 }
+
+// One-liner sugar over a shared default generator:
+List<ColorPalette> colors = await OverTone.Palette.GetColorsAsync("photo.jpg", 6);
 ```
 
 | Parameter | Description |
@@ -185,12 +192,11 @@ public class PaletteGenerator
 | `source` | Local file path **or** HTTP/HTTPS URL |
 | `colorCount` | Number of colors to return |
 | `isUrl` | Set `true` when `source` is a URL |
-| `algorithm` | One of the `PaletteAlgorithm` enum values |
-| `selection` | `Diverse` (default) or `Dominant` — see [Selection modes & tuning](#selection-modes--tuning) |
-| `neuQuantOptions` | Override neuron count / iterations; `null` = auto-scale |
-| `candidatePoolMultiplier` | Candidates per color before narrowing; `null` = per-mode default (5× / 4×) |
-| `minDeltaE` | Minimum CIE76 ΔE between colors kept by `Dominant` mode |
-| `maxDegreeOfParallelism` | `1` (default) = sequential; `> 1` parallelizes K-Means. Identical palettes, just faster |
+| `algorithm` | `Slic` (default) or `SpatialKMeans` |
+| `selection` | `Salient`, `Diverse` (default), or `Dominant` — see [Selection modes & tuning](#selection-modes--tuning) |
+| `candidatePoolMultiplier` | Candidates per color before narrowing; `null` = per-mode default |
+| `minDeltaE` | Minimum CIE76 ΔE between colors kept by `Dominant` / `Salient` |
+| `maxDegreeOfParallelism` | `1` (default) = sequential; `> 1` parallelizes the spatial extractors. Identical palettes, just faster |
 
 > **Input is validated before decoding.** Both overloads check the image's magic bytes (PNG, JPEG, GIF, BMP, PSD, HDR, PNM) up front and throw `UnsupportedImageFormatException` for anything else — a renamed script, a truncated upload, or an HTML error page from a URL never reaches the decoder. Use `ImageValidation.IsSupportedImage(bytes)` to check without throwing.
 
@@ -207,23 +213,24 @@ public class ColorPalette
 }
 ```
 
-### `NeuQuantOptions`
+### Tuning options (optional)
 
 ```csharp
-public record NeuQuantOptions(int NeuronCount, int TrainingIterations)
-{
-    // Auto-scales: neurons = max(colorCount × 8, 64)
-    //              iterations = max(colorCount × 10, 100)
-    public static NeuQuantOptions ForColorCount(int colorCount);
-}
+public record SlicOptions(int SuperpixelCount = 256, double Compactness = 10.0,
+    int Iterations = 10, double RegionMergeDeltaE = 8.0, int MaxPixels = 180_000);
+
+public record SpatialKMeansOptions(int Seed = 1989, int MaxIterations = 20,
+    double SpatialWeight = 0.5, int MaxPixels = 180_000);
 ```
+
+Pass these to the extractor constructors directly, or register one before `AddOverTone()` and the DI container wires it into the matching extractor.
 
 ### Extending with a custom extractor
 
 ```csharp
 public class MyExtractor : IColorPaletteExtractor
 {
-    public PaletteAlgorithm Algorithm => PaletteAlgorithm.KMeans; // reuse or extend the enum
+    public PaletteAlgorithm Algorithm => PaletteAlgorithm.Slic; // reuse or extend the enum
 
     public Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount)
     {
@@ -232,13 +239,13 @@ public class MyExtractor : IColorPaletteExtractor
 }
 ```
 
-`PaletteGenerator` discovers all `IColorPaletteExtractor` implementations in the executing assembly automatically — no registration required.
+Provide your extractors explicitly — `new PaletteGenerator(new IColorPaletteExtractor[] { new MyExtractor(), … })` — or register them with `AddOverTone()` from the `OverTone.Extensions.DependencyInjection` package.
 
 ---
 
 ## Exports
 
-Turn any extracted palette into a ready-to-use file. The library ships six formats out of the box and discovers them the same way it discovers algorithms — implement `IPaletteExporter` to add your own.
+Turn any extracted palette into a ready-to-use file. The library ships six formats out of the box — implement `IPaletteExporter` and hand it to `PaletteExporter` (or register it via `AddOverTone()`) to add your own.
 
 ```csharp
 using OverTone;
@@ -341,7 +348,7 @@ public class GplPaletteExporter : IPaletteExporter
 }
 ```
 
-`PaletteExporter` discovers all `IPaletteExporter` implementations in the executing assembly automatically — no registration required.
+`PaletteExporter` uses the exporters you give it (or the full set registered by `AddOverTone()`); the built-in six are wired up by default.
 
 ---
 
@@ -352,41 +359,33 @@ OverTone/
 ├── OverTone/                     # Class library (NuGet package)
 │   ├── IColorPaletteExtractor.cs
 │   ├── ColorPalette.cs
-│   ├── PaletteAlgorithm.cs
-│   ├── PaletteGenerator.cs
-│   ├── NeuQuantOptions.cs
-│   ├── PaletteSelectionMode.cs   # Diverse vs Dominant narrowing
-│   ├── IPaletteExporter.cs       # Export contract (discovered via reflection)
-│   ├── PaletteExportFormat.cs
-│   ├── PaletteExportOptions.cs
-│   ├── PaletteExporter.cs        # Export facade + reflection registry
-│   ├── Algorithms/               # One file per extractor + private helpers
-│   │   ├── KMeansColorExtractor.cs
-│   │   ├── MedianCutColorExtractor.cs
-│   │   ├── OctreeColorExtractor.cs
-│   │   ├── FuzzyCMeansColorExtractor.cs
-│   │   ├── PopularityColorExtractor.cs
-│   │   ├── WuColorExtractor.cs
-│   │   ├── NeuQuantColorExtractor.cs
-│   │   ├── DedupeColorExtractor.cs
-│   │   └── ...helpers (Axis, Box, Octree, ColorBox, ClusteringHelpers)
-│   ├── Export/                   # One file per format exporter
-│   │   ├── JsonPaletteExporter.cs
-│   │   ├── HexListPaletteExporter.cs
-│   │   ├── CArrayPaletteExporter.cs
-│   │   ├── CssPaletteExporter.cs
-│   │   ├── ScssPaletteExporter.cs
-│   │   ├── TailwindPaletteExporter.cs
-│   │   └── ExportFormatting.cs   # Shared HSL / percentage / naming helpers
-│   └── Processing/               # Post-processing, color math & quality metrics
-│       ├── PalettePostProcessing.cs
-│       ├── ColorMetrics.cs       # RGB distance, RGB→Lab, ΔE
-│       └── PaletteQuality.cs     # Mean ΔE quantization error
-├── OverTone.Sample/              # Interactive console demo (Windows)
+│   ├── DecodedImage.cs           # RGBA buffer + width/height
+│   ├── PaletteAlgorithm.cs       # Slic, SpatialKMeans
+│   ├── PaletteGenerator.cs       # ExtractColorPaletteAsync + GetColorsAsync
+│   ├── Palette.cs                # static GetColors sugar
+│   ├── SlicOptions.cs · SpatialKMeansOptions.cs
+│   ├── PaletteSelectionMode.cs   # Salient / Diverse / Dominant
+│   ├── IPaletteExporter.cs · PaletteExportFormat.cs · PaletteExportOptions.cs
+│   ├── PaletteExporter.cs        # Export facade
+│   ├── Algorithms/
+│   │   ├── ColorPaletteExtractorBase.cs   # decode, downscale, ExtractCore(DecodedImage)
+│   │   ├── SlicColorExtractor.cs          # SLIC superpixels (primary)
+│   │   ├── SpatialKMeansColorExtractor.cs # 5D (L,a,b,x,y) K-Means
+│   │   └── RegionPaletteBuilder.cs        # labels → RAG merge → region palette
+│   ├── Export/                   # One file per format exporter + ExportFormatting.cs
+│   └── Processing/               # Color math, selection & quality metrics
+│       ├── PalettePostProcessing.cs  # Diverse / Salient + ΔE & OkLab de-dup
+│       ├── RepresentativeColor.cs    # peak (modal, chroma-biased) region color
+│       ├── ColorMetrics.cs           # RGB↔Lab, OkLab, ΔE, chroma
+│       └── PaletteQuality.cs         # mean ΔE + coverage assignment
+├── OverTone.Extensions.DependencyInjection/   # AddOverTone() (separate package)
+├── OverTone.Sample/              # Cross-platform console demo
 │   └── Program.cs
 └── OverTone.Tests/               # xUnit tests
     ├── PaletteExporterTests.cs
     ├── AlgorithmQualityTests.cs  # accent recovery, determinism, ΔE
+    ├── SpatialExtractionTests.cs # region surfacing, accent survival, peak-not-mean
+    ├── DependencyInjectionTests.cs · ImageValidationTests.cs
     └── SyntheticImage.cs         # dependency-free BMP generator
 ```
 
@@ -403,7 +402,7 @@ OverTone/
   q) Exit
 ```
 
-Pick a source, then in the per-image session you can **extract** a palette (choosing algorithm, color count, and Diverse/Dominant mode), **compare** every algorithm ranked by mean ΔE (with timing), or open another image. Extraction shows swatches with hex / RGB / HSL / name and a share bar:
+Pick a source, then in the per-image session you can **get the main colors** (no config), **extract** a palette (choosing algorithm, color count, and Salient/Diverse/Dominant mode), **compare** the algorithms side by side (mean ΔE and timing shown for context, not as a ranking), or open another image. Results show swatches with hex / RGB / HSL / name and a share bar:
 
 ```
   ██████  #2B4F82  rgb( 43, 79,130)  hsl(215, 50%, 34%)  Dark Slate Blue  ████████░░  33.4%
@@ -439,7 +438,7 @@ dotnet run --project OverTone.Sample -- --make-testcard testcard.bmp
 ## Requirements
 
 - [.NET 10 SDK](https://dotnet.microsoft.com/download/dotnet/10.0) or later
-- Windows (sample app only — the library targets `net10.0` and is cross-platform)
+- The library and the sample both target `net10.0` and run cross-platform (Windows, macOS, Linux)
 
 ---
 
