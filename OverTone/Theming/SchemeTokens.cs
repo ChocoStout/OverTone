@@ -105,6 +105,9 @@ public static class SchemeTokens
             sb.AppendLine($"{indent}--{prefix}-{name}: {rc.Color.Hex};");
             if (hasOn)
                 sb.AppendLine($"{indent}--{prefix}-on-{name}: {rc.On.Hex};");
+            if (rc.Ramp is { } ramp)
+                foreach (var shade in ramp)
+                    sb.AppendLine($"{indent}--{prefix}-{name}-{shade.Step}: {shade.Color.Hex};");
         }
     }
 }

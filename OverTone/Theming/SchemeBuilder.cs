@@ -63,6 +63,14 @@ public static class SchemeBuilder
         AddStatus(roles, ColorRole.Success, 0.62, 0.14, 150, hue, c0, t, o);
         AddStatus(roles, ColorRole.Info, 0.60, 0.14, 255, hue, c0, t, o);
 
+        if (o.IncludeRamps)
+            foreach (var role in RampedRoles)
+                if (roles.TryGetValue(role, out var rc))
+                {
+                    var (_, rampC, rampH) = ColorMetrics.RgbToOkLch(rc.Color.R, rc.Color.G, rc.Color.B);
+                    roles[role] = rc with { Ramp = BuildRamp(rampH, rampC) };
+                }
+
         return new ColorScheme(o.Mode, roles);
     }
 
@@ -211,4 +219,27 @@ public static class SchemeBuilder
     }
 
     private static double Normalize(double h) => ((h % 360.0) + 360.0) % 360.0;
+
+    private static readonly ColorRole[] RampedRoles =
+    [
+        ColorRole.Primary, ColorRole.Secondary, ColorRole.Tertiary, ColorRole.Neutral,
+        ColorRole.Success, ColorRole.Warning, ColorRole.Error, ColorRole.Info,
+    ];
+
+    // Validated tonal-ramp shape: perceptually-even lightness 50→950, with a chroma curve that peaks
+    // mid-ramp and tapers at both ends (a flat chroma ramp looks cheap at the tints, muddy at the shades).
+    private static readonly (int Step, double L, double CMult)[] RampSteps =
+    [
+        (50, 0.97, 0.30), (100, 0.93, 0.45), (200, 0.85, 0.70), (300, 0.76, 0.90),
+        (400, 0.68, 1.00), (500, 0.60, 1.00), (600, 0.52, 0.95), (700, 0.44, 0.85),
+        (800, 0.36, 0.72), (900, 0.27, 0.55), (950, 0.21, 0.45),
+    ];
+
+    private static IReadOnlyList<Shade> BuildRamp(double hue, double peakChroma)
+    {
+        var shades = new List<Shade>(RampSteps.Length);
+        foreach (var (step, l, mult) in RampSteps)
+            shades.Add(new Shade(step, Lch(l, peakChroma * mult, hue)));
+        return shades;
+    }
 }

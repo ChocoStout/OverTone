@@ -143,6 +143,34 @@ public class ThemingTests
     }
 
     [Fact]
+    public void Ramps_have_11_monotonic_steps_when_requested()
+    {
+        var scheme = ColorScheme.FromSeed("#285AD2", new SchemeOptions { IncludeRamps = true });
+        Assert.True(scheme.TryGet(ColorRole.Primary, out var primary));
+        Assert.NotNull(primary.Ramp);
+        Assert.Equal(11, primary.Ramp!.Count);
+        Assert.Equal([50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950],
+            primary.Ramp.Select(s => s.Step).ToArray());
+
+        var lastL = double.MaxValue;
+        foreach (var shade in primary.Ramp)
+        {
+            var (l, _, _) = ColorMetrics.RgbToOkLch(shade.Color.R, shade.Color.G, shade.Color.B);
+            Assert.True(l <= lastL + 1e-6, $"ramp lightness not monotonic at step {shade.Step}");
+            lastL = l;
+        }
+    }
+
+    [Fact]
+    public void Ramp_css_vars_emitted_when_ramps_included()
+    {
+        var css = ColorScheme.FromSeed("#285AD2", new SchemeOptions { IncludeRamps = true }).AsCss();
+        Assert.Contains("--color-primary-50:", css);
+        Assert.Contains("--color-primary-500:", css);
+        Assert.Contains("--color-primary-950:", css);
+    }
+
+    [Fact]
     public void Rgb_FromHex_parses_short_and_long_forms()
     {
         Assert.Equal(new Rgb(0x28, 0x5A, 0xD2), Rgb.FromHex("#285AD2"));
