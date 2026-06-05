@@ -17,4 +17,12 @@ public enum PaletteSelectionMode
     /// want colors in roughly the proportions they appear — the literal main colors of a photo.
     /// </summary>
     Dominant,
+
+    /// <summary>
+    /// The colors a person would actually name — ranked by <em>saliency</em>, a blend of chroma and
+    /// area, so a small but vivid region (e.g. lips) can outrank a large dull one (e.g. sky), while a
+    /// dominant neutral still surfaces. Pairs with the region-aware extractors and is the default for
+    /// the no-config <c>GetColors</c> entry point.
+    /// </summary>
+    Salient,
 }

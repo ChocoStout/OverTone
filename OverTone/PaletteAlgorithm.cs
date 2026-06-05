@@ -12,4 +12,10 @@ public enum PaletteAlgorithm
     Popularity,
     Wu,
     NeuQuant,
+
+    /// <summary>SLIC superpixel segmentation → region palette (image-space, region-aware). The default.</summary>
+    Slic,
+
+    /// <summary>Spatial 5D K-Means clustering on <c>(L, a, b, x, y)</c> (image-space).</summary>
+    SpatialKMeans,
 }

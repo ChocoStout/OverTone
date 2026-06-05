@@ -26,6 +26,8 @@ public static class ServiceCollectionExtensions
         ArgumentNullException.ThrowIfNull(services);
 
         // Extractors — options pulled from the container when registered, otherwise defaults.
+        services.AddSingleton<IColorPaletteExtractor>(sp => new SlicColorExtractor(sp.GetService<SlicOptions>()));
+        services.AddSingleton<IColorPaletteExtractor>(sp => new SpatialKMeansColorExtractor(sp.GetService<SpatialKMeansOptions>()));
         services.AddSingleton<IColorPaletteExtractor>(sp => new KMeansColorExtractor(sp.GetService<KMeansOptions>()));
         services.AddSingleton<IColorPaletteExtractor>(_ => new MedianCutColorExtractor());
         services.AddSingleton<IColorPaletteExtractor>(_ => new OctreeColorExtractor());

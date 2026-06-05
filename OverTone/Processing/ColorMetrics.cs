@@ -98,6 +98,57 @@ public static class ColorMetrics
     }
 
     /// <summary>
+    /// Converts an sRGB color to the OkLab perceptual color space (Björn Ottosson, 2020). OkLab is a
+    /// modern, closed-form space that is more perceptually uniform than CIELAB — especially across the
+    /// blues — and cheap to compute, which makes it a good basis for perceptual de-duplication.
+    /// </summary>
+    public static (double L, double a, double b) RgbToOkLab(byte r8, byte g8, byte b8)
+    {
+        var r = SrgbByteToLinear(r8);
+        var g = SrgbByteToLinear(g8);
+        var b = SrgbByteToLinear(b8);
+
+        var l = 0.4122214708 * r + 0.5363325363 * g + 0.0514459929 * b;
+        var m = 0.2119034982 * r + 0.6806995451 * g + 0.1073969566 * b;
+        var s = 0.0883024619 * r + 0.2817188376 * g + 0.6299787005 * b;
+
+        var lc = Math.Cbrt(l);
+        var mc = Math.Cbrt(m);
+        var sc = Math.Cbrt(s);
+
+        return (
+            0.2104542553 * lc + 0.7936177850 * mc - 0.0040720468 * sc,
+            1.9779984951 * lc - 2.4285922050 * mc + 0.4505937099 * sc,
+            0.0259040371 * lc + 0.7827717662 * mc - 0.8086757660 * sc);
+    }
+
+    /// <summary>
+    /// Computes the OkLab Delta-E (Euclidean distance in OkLab) between two colors. Note the scale is
+    /// far smaller than CIE76 ΔE — a typical "distinct" threshold is ~0.04, not ~12.
+    /// </summary>
+    public static double DeltaEOk(ColorPalette a, ColorPalette b) =>
+        DeltaEOk(RgbToOkLab(a.R, a.G, a.B), RgbToOkLab(b.R, b.G, b.B));
+
+    /// <summary>Computes the OkLab Delta-E between two OkLab values.</summary>
+    public static double DeltaEOk((double L, double a, double b) lab1, (double L, double a, double b) lab2)
+    {
+        var dL = lab1.L - lab2.L;
+        var da = lab1.a - lab2.a;
+        var db = lab1.b - lab2.b;
+        return Math.Sqrt(dL * dL + da * da + db * db);
+    }
+
+    /// <summary>
+    /// CIELAB chroma (colorfulness): a color's distance from the neutral axis, <c>sqrt(a² + b²)</c>.
+    /// Near 0 for grays; ~90+ for vivid colors. Used to rank a small vivid region above a large dull one.
+    /// </summary>
+    public static double LabChroma(byte r, byte g, byte b)
+    {
+        var (_, a, bb) = RgbToLab(r, g, b);
+        return Math.Sqrt(a * a + bb * bb);
+    }
+
+    /// <summary>
     /// Converts an sRGB byte component (0..255) to linear RGB (0..1).
     /// </summary>
     private static double SrgbByteToLinear(byte v)

@@ -40,6 +40,8 @@ public class PaletteGenerator
     /// </summary>
     public static IReadOnlyList<IColorPaletteExtractor> DefaultExtractors() =>
     [
+        new SlicColorExtractor(),
+        new SpatialKMeansColorExtractor(),
         new KMeansColorExtractor(),
         new MedianCutColorExtractor(),
         new OctreeColorExtractor(),
@@ -144,6 +146,12 @@ public class PaletteGenerator
             var multiplier = Math.Max(1, candidatePoolMultiplier ?? 4);
             var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism);
             return PalettePostProcessing.RemoveNearDuplicateByDeltaE(candidates, minDeltaE, maxCount: colorCount);
+        }
+        else if (selection == PaletteSelectionMode.Salient)
+        {
+            var multiplier = Math.Max(1, candidatePoolMultiplier ?? 5);
+            var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism);
+            return PalettePostProcessing.SelectSalient(candidates, colorCount, minDeltaE);
         }
         else
         {

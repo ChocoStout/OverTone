@@ -8,6 +8,7 @@ public class DependencyInjectionTests
 {
     private static readonly PaletteAlgorithm[] AllAlgorithms =
     [
+        PaletteAlgorithm.Slic, PaletteAlgorithm.SpatialKMeans,
         PaletteAlgorithm.KMeans, PaletteAlgorithm.MedianCut, PaletteAlgorithm.Octree,
         PaletteAlgorithm.FuzzyCMeans, PaletteAlgorithm.Popularity, PaletteAlgorithm.Wu, PaletteAlgorithm.NeuQuant,
     ];
@@ -18,7 +19,7 @@ public class DependencyInjectionTests
         using var provider = new ServiceCollection().AddOverTone().BuildServiceProvider();
 
         var extractors = provider.GetServices<IColorPaletteExtractor>().ToList();
-        Assert.Equal(7, extractors.Count);
+        Assert.Equal(9, extractors.Count);
         foreach (var algorithm in AllAlgorithms)
             Assert.Contains(extractors, e => e.Algorithm == algorithm);
 

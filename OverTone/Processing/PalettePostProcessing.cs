@@ -129,4 +129,61 @@ public static class PalettePostProcessing
 
         return selected.Select(i => candidates[i]).ToList();
     }
+
+    /// <summary>
+    /// Selects up to <paramref name="count"/> colors by <em>saliency</em> — a blend of chroma and area
+    /// tuned so a small but vivid region (e.g. lips) can outrank a large dull one (e.g. sky), while a
+    /// dominant neutral still surfaces. Candidates are ranked by saliency, then near-duplicates are
+    /// dropped by perceptual ΔE. This is the selection that surfaces "the colors a person would name",
+    /// and it relies on the extractor having emitted <em>representative</em> (peak) colors, not means.
+    /// </summary>
+    /// <param name="candidates">Candidate colors, each with a real <see cref="ColorPalette.PixelCount"/>.</param>
+    /// <param name="count">Maximum number of colors to return.</param>
+    /// <param name="minDeltaE">Minimum CIE76 ΔE required between returned colors.</param>
+    /// <param name="chromaWeight">Exponent on normalized chroma (default 0.6).</param>
+    /// <param name="areaWeight">Exponent on area fraction (default 0.5 — sub-linear, so huge regions saturate).</param>
+    public static List<ColorPalette> SelectSalient(
+        List<ColorPalette> candidates, int count,
+        double minDeltaE = 12.0, double chromaWeight = 0.6, double areaWeight = 0.5)
+    {
+        if (candidates.Count == 0 || count <= 0)
+            return [];
+
+        double totalArea = candidates.Sum(c => (long)c.PixelCount);
+        if (totalArea <= 0) totalArea = 1;
+
+        var ranked = candidates
+            .OrderByDescending(c => Saliency(c, totalArea, chromaWeight, areaWeight))
+            .ThenByDescending(c => c.PixelCount)
+            .ToList();
+
+        var result = new List<ColorPalette>(Math.Min(count, ranked.Count));
+        foreach (var candidate in ranked)
+        {
+            var labCandidate = ColorMetrics.RgbToLab(candidate.R, candidate.G, candidate.B);
+            var distinct = result.All(accepted =>
+                ColorMetrics.DeltaE76(labCandidate, ColorMetrics.RgbToLab(accepted.R, accepted.G, accepted.B)) >= minDeltaE);
+
+            if (distinct)
+                result.Add(candidate);
+
+            if (result.Count >= count)
+                break;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Saliency score: <c>(chromaNorm + ε)^chromaWeight · areaFrac^areaWeight + 0.15 · areaFrac</c>.
+    /// The additive term is a neutral floor: a dominant achromatic region (black/white) still scores in
+    /// proportion to its area even when its chroma is ~0 — without it, multiplying by zero chroma would
+    /// erase neutrals from the palette entirely.
+    /// </summary>
+    private static double Saliency(ColorPalette c, double totalArea, double chromaWeight, double areaWeight)
+    {
+        var chromaNorm = Math.Clamp(ColorMetrics.LabChroma(c.R, c.G, c.B) / 90.0, 0.0, 1.0);
+        var areaFrac = c.PixelCount / totalArea;
+        return Math.Pow(chromaNorm + 0.05, chromaWeight) * Math.Pow(areaFrac, areaWeight) + 0.15 * areaFrac;
+    }
 }
