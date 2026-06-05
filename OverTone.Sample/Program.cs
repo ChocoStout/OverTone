@@ -28,26 +28,17 @@ internal static class Program
     // ── Algorithms offered in the extract menu ──────────────────────────────────
     private static readonly (PaletteAlgorithm Algorithm, string Label, PaletteSelectionMode Selection)[] Algorithms =
     [
-        (PaletteAlgorithm.KMeans,      "K-Means",              PaletteSelectionMode.Diverse),
-        (PaletteAlgorithm.MedianCut,   "Median Cut",           PaletteSelectionMode.Diverse),
-        (PaletteAlgorithm.Octree,      "Octree",               PaletteSelectionMode.Diverse),
-        (PaletteAlgorithm.FuzzyCMeans, "Fuzzy C-Means",        PaletteSelectionMode.Diverse),
-        (PaletteAlgorithm.Popularity,  "Popularity",           PaletteSelectionMode.Diverse),
-        (PaletteAlgorithm.Wu,          "Wu Quantization",      PaletteSelectionMode.Diverse),
-        (PaletteAlgorithm.NeuQuant,    "NeuQuant",             PaletteSelectionMode.Diverse),
-        (PaletteAlgorithm.NeuQuant,    "NeuQuant (Iterative)", PaletteSelectionMode.Dominant),
+        (PaletteAlgorithm.Slic,          "SLIC · Salient",        PaletteSelectionMode.Salient),
+        (PaletteAlgorithm.Slic,          "SLIC · Diverse",        PaletteSelectionMode.Diverse),
+        (PaletteAlgorithm.Slic,          "SLIC · Dominant",       PaletteSelectionMode.Dominant),
+        (PaletteAlgorithm.SpatialKMeans, "Spatial K-Means",       PaletteSelectionMode.Salient),
     ];
 
     // Distinct algorithms compared head-to-head (all in Diverse mode for a fair comparison).
     private static readonly (PaletteAlgorithm Algorithm, string Label)[] CompareSet =
     [
-        (PaletteAlgorithm.KMeans,      "K-Means"),
-        (PaletteAlgorithm.MedianCut,   "Median Cut"),
-        (PaletteAlgorithm.Octree,      "Octree"),
-        (PaletteAlgorithm.FuzzyCMeans, "Fuzzy C-Means"),
-        (PaletteAlgorithm.Popularity,  "Popularity"),
-        (PaletteAlgorithm.Wu,          "Wu"),
-        (PaletteAlgorithm.NeuQuant,    "NeuQuant"),
+        (PaletteAlgorithm.Slic,          "SLIC"),
+        (PaletteAlgorithm.SpatialKMeans, "Spatial K-Means"),
     ];
 
     private static readonly (PaletteExportFormat Format, string Label)[] ExportFormats =
@@ -234,18 +225,20 @@ internal static class Program
             DrawBanner();
             Console.WriteLine($"  {Bold("Loaded:")} {Dim(img.Label)}");
             Console.WriteLine();
-            Console.WriteLine($"  {Bold("1)")} Extract a palette");
-            Console.WriteLine($"  {Bold("2)")} Compare algorithms");
-            Console.WriteLine($"  {Bold("3)")} Open a different image");
+            Console.WriteLine($"  {Bold("1)")} Get main colors {Dim("(no config)")}");
+            Console.WriteLine($"  {Bold("2)")} Extract a palette {Dim("(choose algorithm)")}");
+            Console.WriteLine($"  {Bold("3)")} Compare algorithms");
+            Console.WriteLine($"  {Bold("4)")} Open a different image");
             Console.WriteLine($"  {Bold("q)")} Quit");
             Console.WriteLine();
 
             switch (Prompt("  Select › "))
             {
                 case null or "q" or "quit": return true;
-                case "1": await ExtractFlow(img); break;
-                case "2": await CompareFlow(img); break;
-                case "3" or "b" or "back": return false;
+                case "1": await GetColorsFlow(img); break;
+                case "2": await ExtractFlow(img); break;
+                case "3": await CompareFlow(img); break;
+                case "4" or "b" or "back": return false;
             }
         }
     }
@@ -283,6 +276,33 @@ internal static class Program
         }
     }
 
+    // ── Get the main colors, no configuration ────────────────────────────────────
+    private static async Task GetColorsFlow(ImageSource img)
+    {
+        DrawBanner();
+        Console.WriteLine($"  {Bold("Main colors")} {Dim("— no algorithm or settings to pick; region-aware and accent-preserving")}");
+        Console.WriteLine();
+
+        var colorCount = int.TryParse(Prompt("  Number of colors [6] › "), out var cc) && cc > 0 ? cc : 6;
+
+        List<ColorPalette> palette;
+        try
+        {
+            palette = await RunWithSpinner("  Finding the main colors",
+                () => Generator.GetColorsAsync(img.Data, colorCount, Environment.ProcessorCount));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} Failed: {ex.Message}");
+            Pause();
+            return;
+        }
+
+        DisplayPalette(palette, "Main colors", img.Label);
+        await PromptExport(palette, img);
+        Pause();
+    }
+
     // ── Extract a single palette ─────────────────────────────────────────────────
     private static async Task ExtractFlow(ImageSource img)
     {
@@ -298,20 +318,19 @@ internal static class Program
 
         var colorCount = int.TryParse(Prompt("  Number of colors [6] › "), out var cc) && cc > 0 ? cc : 6;
 
-        Console.WriteLine(Dim($"  Selection mode  1) Diverse  2) Dominant   [Enter to keep {selection}]"));
+        Console.WriteLine(Dim($"  Selection mode  1) Salient  2) Diverse  3) Dominant   [Enter to keep {selection}]"));
         switch (Prompt("  Mode › "))
         {
-            case "1": selection = PaletteSelectionMode.Diverse; break;
-            case "2": selection = PaletteSelectionMode.Dominant; break;
+            case "1": selection = PaletteSelectionMode.Salient; break;
+            case "2": selection = PaletteSelectionMode.Diverse; break;
+            case "3": selection = PaletteSelectionMode.Dominant; break;
         }
-
-        var neuQuantOptions = algorithm == PaletteAlgorithm.NeuQuant ? PromptNeuQuant(colorCount) : null;
 
         List<ColorPalette> palette;
         try
         {
             palette = await RunWithSpinner($"  Extracting with {Bold(algorithmLabel)}",
-                () => Generator.ExtractColorPaletteAsync(img.Data, colorCount, algorithm, selection, neuQuantOptions,
+                () => Generator.ExtractColorPaletteAsync(img.Data, colorCount, algorithm, selection,
                     maxDegreeOfParallelism: Environment.ProcessorCount));
         }
         catch (Exception ex)
@@ -326,24 +345,11 @@ internal static class Program
         Pause();
     }
 
-    private static NeuQuantOptions? PromptNeuQuant(int colorCount)
-    {
-        var auto = NeuQuantOptions.ForColorCount(colorCount);
-        Console.WriteLine(Dim($"  NeuQuant defaults → neurons: {auto.NeuronCount}, iterations: {auto.TrainingIterations}"));
-
-        var neurons    = int.TryParse(Prompt("  Override neurons?    [Enter to keep] › "), out var n) && n > 0 ? n : auto.NeuronCount;
-        var iterations = int.TryParse(Prompt("  Override iterations? [Enter to keep] › "), out var it) && it > 0 ? it : auto.TrainingIterations;
-
-        return neurons != auto.NeuronCount || iterations != auto.TrainingIterations
-            ? new NeuQuantOptions(neurons, iterations)
-            : null;
-    }
-
-    // ── Compare every algorithm on the same image, ranked by mean ΔE ─────────────
+    // ── Compare every algorithm on the same image (ΔE shown as info, not a ranking) ──
     private static async Task CompareFlow(ImageSource img)
     {
         DrawBanner();
-        Console.WriteLine($"  {Bold("Compare algorithms")} {Dim("— same image, ranked by mean ΔE (lower = closer to the image)")}");
+        Console.WriteLine($"  {Bold("Compare algorithms")} {Dim("— same image, side by side")}");
         Console.WriteLine();
 
         var colorCount = int.TryParse(Prompt("  Number of colors [6] › "), out var cc) && cc > 0 ? cc : 6;
@@ -353,14 +359,11 @@ internal static class Program
 
         Console.WriteLine();
         Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
-        for (var i = 0; i < results.Count; i++)
-        {
-            var r = results[i];
-            var marker = i == 0 ? Fg(0, 230, 120, "★") : " ";
-            Console.WriteLine($"  {marker} {r.Label,-14} {Bold($"ΔE {r.DeltaE,6:F2}")}  {Dim($"{r.ElapsedMs,6:F0} ms")}  {RenderSwatches(r.Palette)}");
-        }
+        foreach (var r in results)
+            Console.WriteLine($"  {Bold($"{r.Label,-16}")} {Dim($"ΔE {r.DeltaE,6:F2}")}  {Dim($"{r.ElapsedMs,6:F0} ms")}  {RenderSwatches(r.Palette)}");
         Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
-        Console.WriteLine(Dim("  ★ best (lowest mean ΔE) · ΔE ≈ how far each pixel sits from its nearest palette color"));
+        Console.WriteLine(Dim("  ΔE = reconstruction fidelity (how closely the palette rebuilds the image), not a theming"));
+        Console.WriteLine(Dim("  score — a region-aware palette intentionally trades ΔE for vivid, nameable accents."));
         Console.WriteLine();
 
         // Offer to save the full per-algorithm results (palettes + ΔE + timing) as JSON.
@@ -412,7 +415,6 @@ internal static class Program
             }
         }
 
-        results.Sort((a, b) => a.DeltaE.CompareTo(b.DeltaE));
         return results;
     }
 
@@ -425,7 +427,7 @@ internal static class Program
             ["colorCount"] = colorCount,
             ["selection"] = nameof(PaletteSelectionMode.Diverse),
             ["generatedUtc"] = DateTime.UtcNow.ToString("o"),
-            ["note"] = "elapsedMs is single-run wall-clock including image decode; results are ranked by meanDeltaE (lower = closer to the image).",
+            ["note"] = "elapsedMs is single-run wall-clock including image decode; meanDeltaE is reconstruction fidelity (lower = closer pixel reconstruction), not a theming-quality ranking.",
         };
 
         var resultsArray = new JsonArray();

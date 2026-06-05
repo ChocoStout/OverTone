@@ -47,9 +47,9 @@ public class AlgorithmQualityTests
     }
 
     [Fact]
-    public async Task KMeans_diverse_recovers_the_chromatic_accents()
+    public async Task Slic_salient_recovers_the_chromatic_accents()
     {
-        var palette = await ExtractAsync(PaletteAlgorithm.KMeans, PaletteSelectionMode.Diverse);
+        var palette = await ExtractAsync(PaletteAlgorithm.Slic, PaletteSelectionMode.Salient);
 
         // The whole point of the 1989 case: the accent colors must surface, not just the neutrals.
         Assert.True(ContainsNear(palette, Blue, 25),   "expected a blue accent in the palette");
@@ -58,10 +58,10 @@ public class AlgorithmQualityTests
     }
 
     [Fact]
-    public async Task KMeans_is_deterministic_across_runs()
+    public async Task Slic_is_deterministic_across_runs()
     {
-        var a = await ExtractAsync(PaletteAlgorithm.KMeans);
-        var b = await ExtractAsync(PaletteAlgorithm.KMeans);
+        var a = await ExtractAsync(PaletteAlgorithm.Slic);
+        var b = await ExtractAsync(PaletteAlgorithm.Slic);
 
         Assert.Equal(a.Count, b.Count);
         for (var i = 0; i < a.Count; i++)
@@ -75,7 +75,7 @@ public class AlgorithmQualityTests
     [Fact]
     public async Task Dominant_mode_leads_with_the_background()
     {
-        var palette = await ExtractAsync(PaletteAlgorithm.KMeans, PaletteSelectionMode.Dominant);
+        var palette = await ExtractAsync(PaletteAlgorithm.Slic, PaletteSelectionMode.Dominant);
 
         // Cream is ~55% of the image, so dominant mode (ordered by frequency) should put it first.
         Assert.True(ContainsNear([palette[0]], Cream, 20), "dominant mode should lead with the background color");
@@ -89,8 +89,8 @@ public class AlgorithmQualityTests
         await File.WriteAllBytesAsync(path, bytes);
         try
         {
-            var few  = await Generator.ExtractColorPaletteAsync(path, 3, isUrl: false, algorithm: PaletteAlgorithm.KMeans);
-            var many = await Generator.ExtractColorPaletteAsync(path, 5, isUrl: false, algorithm: PaletteAlgorithm.KMeans);
+            var few  = await Generator.ExtractColorPaletteAsync(path, 3, isUrl: false, algorithm: PaletteAlgorithm.Slic);
+            var many = await Generator.ExtractColorPaletteAsync(path, 5, isUrl: false, algorithm: PaletteAlgorithm.Slic);
 
             var errFew  = PaletteQuality.MeanDeltaE(bytes, few);
             var errMany = PaletteQuality.MeanDeltaE(bytes, many);

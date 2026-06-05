@@ -5,7 +5,7 @@ namespace OverTone.Algorithms;
 
 /// <summary>
 /// Base class for all built-in color palette extractors. It owns the work every extractor shares —
-/// decoding the image to RGBA and exposing the visible pixels — and implements the
+/// decoding the image and bounding its working size — and implements the
 /// <see cref="IColorPaletteExtractor"/> overloads, so a concrete extractor only has to implement
 /// <see cref="ExtractCore(DecodedImage, int, int)"/>. This keeps the algorithms small and uniform (and
 /// easy to register for DI).
@@ -30,31 +30,12 @@ public abstract class ColorPaletteExtractorBase : IColorPaletteExtractor
     }
 
     /// <summary>
-    /// Performs the algorithm-specific extraction from a decoded, tightly-packed RGBA buffer.
-    /// </summary>
-    /// <param name="rgba">Decoded image as RGBA bytes (4 per pixel).</param>
-    /// <param name="colorCount">Number of colors to return.</param>
-    /// <param name="maxDegreeOfParallelism">Worker-thread cap; <c>1</c> means sequential.</param>
-    /// <remarks>
-    /// Legacy color-only entry point. During the image-space migration this is a virtual bridge target
-    /// rather than an abstract method: spatial extractors override <see cref="ExtractCore(DecodedImage, int, int)"/>
-    /// instead and never reach this. (It will be removed once all extractors are spatial.)
-    /// </remarks>
-    protected virtual List<ColorPalette> ExtractCore(byte[] rgba, int colorCount, int maxDegreeOfParallelism)
-        => throw new NotSupportedException(
-            "This extractor implements the image-space ExtractCore(DecodedImage, …) overload.");
-
-    /// <summary>
     /// Performs the algorithm-specific extraction from a decoded image (RGBA bytes plus dimensions).
-    /// Spatial extractors override this directly because they need pixel position; the default bridges
-    /// to the legacy color-only <see cref="ExtractCore(byte[], int, int)"/> for extractors that work on
-    /// color alone.
     /// </summary>
     /// <param name="image">The decoded image (RGBA buffer + width/height).</param>
     /// <param name="colorCount">Number of colors to return.</param>
     /// <param name="maxDegreeOfParallelism">Worker-thread cap; <c>1</c> means sequential.</param>
-    protected virtual List<ColorPalette> ExtractCore(DecodedImage image, int colorCount, int maxDegreeOfParallelism)
-        => ExtractCore(image.Rgba, colorCount, maxDegreeOfParallelism);
+    protected abstract List<ColorPalette> ExtractCore(DecodedImage image, int colorCount, int maxDegreeOfParallelism);
 
     /// <summary>
     /// Box-downscales an image so it has at most <paramref name="maxPixels"/> pixels, preserving the 2D
@@ -112,12 +93,6 @@ public abstract class ColorPaletteExtractorBase : IColorPaletteExtractor
     }
 
     /// <summary>
-    /// Decodes encoded image bytes (PNG, JPEG, BMP, …) into a tightly-packed RGBA buffer.
-    /// </summary>
-    protected static byte[] DecodeRgba(byte[] imageData) =>
-        ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha).Data;
-
-    /// <summary>
     /// Decodes encoded image bytes (PNG, JPEG, BMP, …) into a <see cref="DecodedImage"/> — a packed
     /// RGBA buffer together with its width and height.
     /// </summary>
@@ -125,37 +100,5 @@ public abstract class ColorPaletteExtractorBase : IColorPaletteExtractor
     {
         var result = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
         return new DecodedImage(result.Data, result.Width, result.Height);
-    }
-
-    /// <summary>
-    /// Collects visible pixels (alpha &gt; 128) as <c>[R, G, B]</c> triplets. When
-    /// <paramref name="maxSamples"/> is greater than zero and the image has more visible pixels than
-    /// that, the pixels are stride-subsampled down to roughly <paramref name="maxSamples"/> — this keeps
-    /// the per-pixel algorithms (and memory) bounded on very large images.
-    /// </summary>
-    /// <exception cref="InvalidOperationException">No visible pixels were found.</exception>
-    protected static List<byte[]> ExtractVisiblePixels(byte[] rgba, int maxSamples = 0)
-    {
-        var points = new List<byte[]>();
-        for (var i = 0; i < rgba.Length; i += 4)
-        {
-            if (rgba[i + 3] <= 128)
-                continue;
-            points.Add([rgba[i], rgba[i + 1], rgba[i + 2]]);
-        }
-
-        if (points.Count == 0)
-            throw new InvalidOperationException("No visible pixels found in the image.");
-
-        if (maxSamples > 0 && points.Count > maxSamples)
-        {
-            var stride = points.Count / maxSamples;
-            var sampled = new List<byte[]>(maxSamples);
-            for (var s = 0; s < points.Count; s += stride)
-                sampled.Add(points[s]);
-            points = sampled;
-        }
-
-        return points;
     }
 }

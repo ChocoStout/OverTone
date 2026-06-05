@@ -2,6 +2,11 @@ using OverTone;
 
 namespace OverTone.Processing;
 
+/// <summary>
+/// Post-processing that narrows an extractor's raw candidate colors into a final palette: perceptual
+/// near-duplicate removal (CIE76 or OkLab) and the selection strategies behind
+/// <see cref="PaletteSelectionMode"/> — diverse (farthest-point) and salient (chroma × area).
+/// </summary>
 public static class PalettePostProcessing
 {
     /// <summary>
@@ -46,6 +51,35 @@ public static class PalettePostProcessing
             var isDistinct = result
                 .Select(accepted => ColorMetrics.RgbToLab(accepted.R, accepted.G, accepted.B))
                 .All(labAccepted => !(ColorMetrics.DeltaE76(labCandidate, labAccepted) < minDeltaE));
+
+            if (isDistinct)
+                result.Add(candidate);
+
+            if (maxCount.HasValue && result.Count >= maxCount.Value)
+                break;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Remove near-duplicate colors using perceptual distance in OkLab space. OkLab is more uniform than
+    /// CIELAB (especially in the blues), so this groups true look-alikes better — used to return
+    /// <em>distinct</em> colors (not five shades of cream). Note the threshold scale: ~0.045, not ~12.
+    /// </summary>
+    /// <param name="input">Candidate palette entries.</param>
+    /// <param name="minDistance">Minimum OkLab ΔE required between returned colors.</param>
+    /// <param name="maxCount">Optional maximum number of colors to return.</param>
+    public static List<ColorPalette> RemoveNearDuplicateByOkLab(List<ColorPalette> input, double minDistance = 0.045, int? maxCount = null)
+    {
+        var result = new List<ColorPalette>();
+
+        foreach (var candidate in input.OrderByDescending(p => p.PixelCount))
+        {
+            var okCandidate = ColorMetrics.RgbToOkLab(candidate.R, candidate.G, candidate.B);
+            var isDistinct = result
+                .Select(accepted => ColorMetrics.RgbToOkLab(accepted.R, accepted.G, accepted.B))
+                .All(okAccepted => ColorMetrics.DeltaEOk(okCandidate, okAccepted) >= minDistance);
 
             if (isDistinct)
                 result.Add(candidate);
@@ -180,7 +214,7 @@ public static class PalettePostProcessing
     /// proportion to its area even when its chroma is ~0 — without it, multiplying by zero chroma would
     /// erase neutrals from the palette entirely.
     /// </summary>
-    private static double Saliency(ColorPalette c, double totalArea, double chromaWeight, double areaWeight)
+    public static double Saliency(ColorPalette c, double totalArea, double chromaWeight = 0.6, double areaWeight = 0.5)
     {
         var chromaNorm = Math.Clamp(ColorMetrics.LabChroma(c.R, c.G, c.B) / 90.0, 0.0, 1.0);
         var areaFrac = c.PixelCount / totalArea;

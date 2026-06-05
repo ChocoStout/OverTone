@@ -107,4 +107,73 @@ public static class PaletteQuality
 
         return counted == 0 ? 0.0 : total / counted;
     }
+
+    /// <summary>
+    /// Reassigns every visible pixel of the image to its nearest color in <paramref name="palette"/>
+    /// (CIE76 ΔE) and rewrites each entry's <see cref="ColorPalette.PixelCount"/> to that true count, so
+    /// the reported sizes/percentages reflect actual image coverage (summing to the visible-pixel total)
+    /// rather than raw cluster/region sizes. Colors that win no pixels are dropped; the result is ordered
+    /// by coverage, largest first. Counts are integers, so the parallel path is order-independent.
+    /// </summary>
+    public static List<ColorPalette> AssignCoverage(byte[] imageData, List<ColorPalette> palette,
+        int maxDegreeOfParallelism = 1)
+    {
+        if (palette.Count == 0)
+            return palette;
+
+        var image = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
+        var pixels = image.Data;
+        var pixelCount = pixels.Length / 4;
+
+        var paletteLab = new (double L, double a, double b)[palette.Count];
+        for (var i = 0; i < palette.Count; i++)
+            paletteLab[i] = ColorMetrics.RgbToLab(palette[i].R, palette[i].G, palette[i].B);
+
+        int Nearest(int px)
+        {
+            var i = px * 4;
+            var lab = ColorMetrics.RgbToLab(pixels[i], pixels[i + 1], pixels[i + 2]);
+            var best = 0;
+            var bestD = double.MaxValue;
+            for (var c = 0; c < paletteLab.Length; c++)
+            {
+                var d = ColorMetrics.DeltaE76(lab, paletteLab[c]);
+                if (d < bestD) { bestD = d; best = c; }
+            }
+            return best;
+        }
+
+        var counts = new long[palette.Count];
+        if (maxDegreeOfParallelism <= 1 || pixelCount < ParallelThreshold)
+        {
+            for (var px = 0; px < pixelCount; px++)
+            {
+                if (pixels[px * 4 + 3] <= 128) continue;
+                counts[Nearest(px)]++;
+            }
+        }
+        else
+        {
+            var sync = new object();
+            Parallel.ForEach(
+                Partitioner.Create(0, pixelCount),
+                new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism },
+                () => new long[palette.Count],
+                (range, _, local) =>
+                {
+                    for (var px = range.Item1; px < range.Item2; px++)
+                    {
+                        if (pixels[px * 4 + 3] <= 128) continue;
+                        local[Nearest(px)]++;
+                    }
+                    return local;
+                },
+                local => { lock (sync) { for (var c = 0; c < counts.Length; c++) counts[c] += local[c]; } });
+        }
+
+        for (var c = 0; c < palette.Count; c++)
+            palette[c].PixelCount = (int)Math.Min(int.MaxValue, counts[c]);
+
+        return palette.Where(p => p.PixelCount > 0).OrderByDescending(p => p.PixelCount).ToList();
+    }
 }

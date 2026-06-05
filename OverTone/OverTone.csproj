@@ -7,11 +7,12 @@
     <PackageId>OverTone</PackageId>
     <Title>OverTone — Color Palette Extractor</Title>
     <Description>
-      Extract perceptually distinct color palettes from images using eight algorithms:
-      K-Means, Median Cut, Octree, Fuzzy C-Means, Popularity, Wu, and NeuQuant.
-      Supports local files and URLs. Async-first, zero extra BCL dependencies.
+      Extract region-aware, perceptually distinct color palettes from images using image-space
+      segmentation — SLIC superpixels and spatial 5D K-Means — with peak (not averaged) region colors
+      and a saliency-ranked GetColors entry point. Supports local files and URLs. Async-first;
+      dependency-free core (only StbImageSharp, for decoding).
     </Description>
-    <PackageTags>color;palette;quantization;image;kmeans;octree;neuquant;wu</PackageTags>
+    <PackageTags>color;palette;extraction;image;slic;superpixel;segmentation;kmeans;oklab</PackageTags>
     <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/ChocoStout/OverTone</PackageProjectUrl>

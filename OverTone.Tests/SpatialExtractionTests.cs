@@ -118,4 +118,28 @@ public class SpatialExtractionTests
         var distinct = palette.Select(c => (c.R, c.G, c.B)).Distinct().Count();
         Assert.Equal(palette.Count, distinct); // no duplicate padding
     }
+
+    [Fact]
+    public async Task GetColors_returns_distinct_main_colors_with_true_coverage()
+    {
+        const int w = 240, h = 80;
+        var bytes = SyntheticImage.VerticalStripes(w, h,
+            ((220, 20, 60), 1.0), ((40, 160, 60), 1.0), ((40, 90, 200), 1.0));
+
+        var colors = await Generator.GetColorsAsync(bytes, 3);
+
+        Assert.NotEmpty(colors);
+        Assert.True(colors.Count <= 3);
+
+        var distinct = colors.Select(c => (c.R, c.G, c.B)).Distinct().Count();
+        Assert.Equal(colors.Count, distinct);
+
+        // Coverage reassigns every (opaque) pixel to its nearest returned color, so counts sum to all pixels.
+        Assert.Equal((long)w * h, colors.Sum(c => (long)c.PixelCount));
+
+        // The three vivid source colors should all be recovered.
+        Assert.True(Contains(colors, (220, 20, 60)));
+        Assert.True(Contains(colors, (40, 160, 60)));
+        Assert.True(Contains(colors, (40, 90, 200)));
+    }
 }

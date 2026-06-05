@@ -9,8 +9,6 @@ public class DependencyInjectionTests
     private static readonly PaletteAlgorithm[] AllAlgorithms =
     [
         PaletteAlgorithm.Slic, PaletteAlgorithm.SpatialKMeans,
-        PaletteAlgorithm.KMeans, PaletteAlgorithm.MedianCut, PaletteAlgorithm.Octree,
-        PaletteAlgorithm.FuzzyCMeans, PaletteAlgorithm.Popularity, PaletteAlgorithm.Wu, PaletteAlgorithm.NeuQuant,
     ];
 
     [Fact]
@@ -19,7 +17,7 @@ public class DependencyInjectionTests
         using var provider = new ServiceCollection().AddOverTone().BuildServiceProvider();
 
         var extractors = provider.GetServices<IColorPaletteExtractor>().ToList();
-        Assert.Equal(9, extractors.Count);
+        Assert.Equal(2, extractors.Count);
         foreach (var algorithm in AllAlgorithms)
             Assert.Contains(extractors, e => e.Algorithm == algorithm);
 
@@ -35,7 +33,7 @@ public class DependencyInjectionTests
         var generator = provider.GetRequiredService<PaletteGenerator>();
 
         var bytes = SyntheticImage.VerticalStripes(80, 20, ((10, 20, 200), 1.0), ((220, 30, 40), 1.0));
-        var palette = await generator.ExtractColorPaletteAsync(bytes, 4, algorithm: PaletteAlgorithm.Wu);
+        var palette = await generator.ExtractColorPaletteAsync(bytes, 4, algorithm: PaletteAlgorithm.Slic);
 
         Assert.NotEmpty(palette);
     }
@@ -43,9 +41,9 @@ public class DependencyInjectionTests
     [Fact]
     public void Registered_options_flow_into_the_extractor()
     {
-        // A custom KMeansOptions registered before AddOverTone() must be wired into the K-Means extractor.
+        // A custom SpatialKMeansOptions registered before AddOverTone() must be wired into the extractor.
         using var provider = new ServiceCollection()
-            .AddSingleton(new KMeansOptions(Seed: 7, MaxIterations: 1))
+            .AddSingleton(new SpatialKMeansOptions(Seed: 7, MaxIterations: 1))
             .AddOverTone()
             .BuildServiceProvider();
 
