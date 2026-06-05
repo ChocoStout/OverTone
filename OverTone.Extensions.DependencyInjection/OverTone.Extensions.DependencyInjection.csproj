@@ -11,7 +11,7 @@
       stays dependency-free; this optional package adds the DI glue.
     </Description>
     <PackageTags>color;palette;dependency-injection;di;extensions</PackageTags>
-    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageProjectUrl>https://github.com/ChocoStout/OverTone</PackageProjectUrl>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
   </PropertyGroup>

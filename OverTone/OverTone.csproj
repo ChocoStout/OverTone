@@ -13,7 +13,7 @@
       dependency-free core (only StbImageSharp, for decoding).
     </Description>
     <PackageTags>color;palette;extraction;image;slic;superpixel;segmentation;kmeans;oklab</PackageTags>
-    <PackageLicenseExpression>AGPL-3.0-or-later</PackageLicenseExpression>
+    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
     <PackageProjectUrl>https://github.com/ChocoStout/OverTone</PackageProjectUrl>
     <PublishRepositoryUrl>true</PublishRepositoryUrl>

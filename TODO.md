@@ -130,5 +130,5 @@ Industry references to follow: **WCAG 2.2** contrast (relative-luminance formula
 - [ ] **`CHANGELOG.md`**  
   Start a changelog following [Keep a Changelog](https://keepachangelog.com/) conventions so release notes are easy to produce — the image-space migration (removed algorithms, new `GetColors`, breaking `PaletteGenerator` signature change) is a natural first entry.
 
-- [ ] **`LICENSE` file**  
-  Add a `LICENSE` file containing the **AGPL-3.0-or-later** text to match `PackageLicenseExpression` in the csproj; the reference exists but the file does not yet.
+- [x] **`LICENSE` file**  
+  Done — `LICENSE` contains the **MIT** license text, matching `PackageLicenseExpression = MIT` in both packable projects (core + DI extensions).

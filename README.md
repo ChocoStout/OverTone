@@ -11,7 +11,7 @@
 **Color Palette Extractor for .NET**
 
 [![.NET](https://img.shields.io/badge/.NET-10.0-512bd4?logo=dotnet)](https://dotnet.microsoft.com/)
-[![License: AGPL-3.0-or-later](https://img.shields.io/badge/License-AGPL--3.0--or--later-blue.svg)](LICENSE)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![NuGet](https://img.shields.io/nuget/v/OverTone?logo=nuget)](https://www.nuget.org/packages/OverTone)
 [![Build](https://img.shields.io/github/actions/workflow/status/ChocoStout/OverTone/build.yml?logo=github)](https://github.com/ChocoStout/OverTone/actions)
 
@@ -466,4 +466,4 @@ All contributions welcome — new algorithms, bug fixes, performance improvement
 
 ## License
 
-[AGPL-3.0-or-later](LICENSE) © ChocoStout
+[MIT](LICENSE) © 2026 ChocoStout
