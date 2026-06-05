@@ -2,5 +2,6 @@
   <Project Path="OverTone.Extensions.DependencyInjection/OverTone.Extensions.DependencyInjection.csproj" />
   <Project Path="OverTone.Sample/OverTone.Sample.csproj" />
   <Project Path="OverTone.Tests/OverTone.Tests.csproj" />
+  <Project Path="OverTone.Web/OverTone.Web.csproj" />
   <Project Path="OverTone/OverTone.csproj" />
 </Solution>

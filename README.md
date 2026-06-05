@@ -381,6 +381,8 @@ OverTone/
 ├── OverTone.Extensions.DependencyInjection/   # AddOverTone() (separate package)
 ├── OverTone.Sample/              # Cross-platform console demo
 │   └── Program.cs
+├── OverTone.Web/                 # Blazor Server demo (browser version of the sample)
+│   └── Components/Pages/Home.razor
 └── OverTone.Tests/               # xUnit tests
     ├── PaletteExporterTests.cs
     ├── AlgorithmQualityTests.cs  # accent recovery, determinism, ΔE
@@ -432,6 +434,15 @@ dotnet run --project OverTone.Sample -- --make-testcard testcard.bmp
 ```
 
 > Runs anywhere .NET 10 runs (Windows, macOS, Linux). On a plain terminal without truecolor ANSI it falls back to a simpler colored view.
+
+### Web demo
+
+`OverTone.Web` is a tiny **Blazor Server** app — a browser version of the sample. Upload an image (or load the built-in test card), choose a method, and see the palette rendered as live HTML swatches (plus a coverage-weighted color strip) right beside the source image for visual comparison. It calls the library directly via `AddOverTone()`, so the results match the CLI exactly.
+
+```bash
+dotnet run --project OverTone.Web
+# then open the http://localhost:<port> URL it prints
+```
 
 ---
 

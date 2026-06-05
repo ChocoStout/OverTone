@@ -1,0 +1,185 @@
+@page "/"
+@rendermode InteractiveServer
+@using System.Diagnostics
+@using System.Globalization
+@inject PaletteGenerator Generator
+
+<h1>OverTone — Palette Explorer</h1>
+<p class="sub">
+    Upload an image (or load the built-in test card), extract a palette, and compare the source with the
+    result as real HTML colors. Runs the OverTone library directly — the same extraction the CLI sample uses.
+</p>
+
+<div class="controls">
+    <label class="btn">
+        Choose image…
+        <InputFile OnChange="OnFile" accept="image/*" style="display:none" />
+    </label>
+    <button class="btn" @onclick="UseTestCard">Use test card</button>
+
+    <label>Colors
+        <input type="number" min="2" max="24" @bind="_colorCount" />
+    </label>
+
+    <label>Method
+        <select @bind="_method">
+            <option value="GetColors">Main colors (no config)</option>
+            <option value="Slic-Salient">SLIC · Salient</option>
+            <option value="Slic-Diverse">SLIC · Diverse</option>
+            <option value="Slic-Dominant">SLIC · Dominant</option>
+            <option value="Spatial-Salient">Spatial K-Means · Salient</option>
+        </select>
+    </label>
+
+    <button class="btn primary" @onclick="Run" disabled="@(_imageBytes is null || _busy)">
+        @(_busy ? "Working…" : "Extract")
+    </button>
+</div>
+
+@if (_error is not null)
+{
+    <div class="error">@_error</div>
+}
+
+@if (_imageDataUrl is not null)
+{
+    <div class="result">
+        <figure class="source">
+            <img src="@_imageDataUrl" alt="source image" />
+            <figcaption>@_fileName</figcaption>
+        </figure>
+
+        <div class="palette">
+            @if (_palette is { Count: > 0 })
+            {
+                <div class="strip" title="Palette weighted by image coverage">
+                    @foreach (var c in _palette)
+                    {
+                        <div class="seg" style="background:@c.AsHex; flex:@c.PixelCount"></div>
+                    }
+                </div>
+
+                <ul class="swatches">
+                    @foreach (var c in _palette)
+                    {
+                        var pct = _total > 0 ? c.PixelCount * 100.0 / _total : 0;
+                        <li>
+                            <span class="chip" style="background:@c.AsHex"></span>
+                            <span class="hex">@c.AsHex</span>
+                            <span class="name">@ColorNaming.NearestName(c.R, c.G, c.B)</span>
+                            <span class="pct">@pct.ToString("F1", CultureInfo.InvariantCulture)%</span>
+                        </li>
+                    }
+                </ul>
+
+                <p class="meta">
+                    @_palette.Count colors · @MethodLabel(_method) · @_elapsedMs.ToString("F0", CultureInfo.InvariantCulture) ms
+                </p>
+            }
+            else if (!_busy)
+            {
+                <p class="hint">Adjust the options and click <strong>Extract</strong>.</p>
+            }
+        </div>
+    </div>
+}
+else
+{
+    <p class="hint">No image yet — choose one above, or load the built-in test card.</p>
+}
+
+@code {
+    private const long MaxBytes = 16L * 1024 * 1024;
+
+    private byte[]? _imageBytes;
+    private string? _imageDataUrl;
+    private string _fileName = "";
+    private int _colorCount = 6;
+    private string _method = "GetColors";
+
+    private List<ColorPalette>? _palette;
+    private long _total;
+    private bool _busy;
+    private string? _error;
+    private double _elapsedMs;
+
+    private async Task OnFile(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _palette = null;
+        var file = e.File;
+
+        if (file.Size > MaxBytes)
+        {
+            _error = $"Image is too large (max {MaxBytes / (1024 * 1024)} MB).";
+            return;
+        }
+
+        try
+        {
+            using var ms = new MemoryStream();
+            await file.OpenReadStream(MaxBytes).CopyToAsync(ms);
+            _imageBytes = ms.ToArray();
+            _fileName = file.Name;
+            var contentType = string.IsNullOrWhiteSpace(file.ContentType) ? "image/png" : file.ContentType;
+            _imageDataUrl = $"data:{contentType};base64,{Convert.ToBase64String(_imageBytes)}";
+            await Run();
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+    }
+
+    private async Task UseTestCard()
+    {
+        _error = null;
+        _palette = null;
+        _imageBytes = TestCardImage.CreateBmp();
+        _fileName = "Built-in test card · 12 known colors";
+        _imageDataUrl = $"data:image/bmp;base64,{Convert.ToBase64String(_imageBytes)}";
+        await Run();
+    }
+
+    private async Task Run()
+    {
+        if (_imageBytes is null)
+            return;
+
+        _busy = true;
+        _error = null;
+        try
+        {
+            var sw = Stopwatch.StartNew();
+            _palette = _method switch
+            {
+                "Slic-Salient"    => await Generator.ExtractColorPaletteAsync(_imageBytes, _colorCount, PaletteAlgorithm.Slic, PaletteSelectionMode.Salient),
+                "Slic-Diverse"    => await Generator.ExtractColorPaletteAsync(_imageBytes, _colorCount, PaletteAlgorithm.Slic, PaletteSelectionMode.Diverse),
+                "Slic-Dominant"   => await Generator.ExtractColorPaletteAsync(_imageBytes, _colorCount, PaletteAlgorithm.Slic, PaletteSelectionMode.Dominant),
+                "Spatial-Salient" => await Generator.ExtractColorPaletteAsync(_imageBytes, _colorCount, PaletteAlgorithm.SpatialKMeans, PaletteSelectionMode.Salient),
+                _                 => await Generator.GetColorsAsync(_imageBytes, _colorCount),
+            };
+            sw.Stop();
+            _elapsedMs = sw.Elapsed.TotalMilliseconds;
+            _total = _palette.Sum(c => (long)c.PixelCount);
+        }
+        catch (Exception ex)
+        {
+            _palette = null;
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private static string MethodLabel(string method) => method switch
+    {
+        "Slic-Salient"    => "SLIC · Salient",
+        "Slic-Diverse"    => "SLIC · Diverse",
+        "Slic-Dominant"   => "SLIC · Dominant",
+        "Spatial-Salient" => "Spatial K-Means · Salient",
+        _                 => "Main colors (GetColors)",
+    };
+}
