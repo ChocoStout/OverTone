@@ -22,7 +22,7 @@ public readonly record struct Rgb(byte R, byte G, byte B)
             throw new FormatException($"'{hex}' is not a valid hex color (expected #RGB or #RRGGBB).");
 
         return new Rgb(
-            Convert.ToByte(s.Substring(0, 2), 16),
+            Convert.ToByte(s[..2], 16),
             Convert.ToByte(s.Substring(2, 2), 16),
             Convert.ToByte(s.Substring(4, 2), 16));
     }

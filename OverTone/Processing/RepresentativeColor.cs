@@ -14,7 +14,7 @@ public sealed class RepresentativeColorAccumulator
 {
     // 4 bits per channel: 16 levels each, up to 16×16×16 = 4096 bins. Stored sparsely (only populated
     // bins exist), so a small region costs little and a large one is bounded at 4096 entries.
-    private readonly Dictionary<int, Bin> _bins = new();
+    private readonly Dictionary<int, Bin> _bins = [];
     private int _count;
 
     private struct Bin

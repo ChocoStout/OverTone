@@ -174,7 +174,7 @@ internal static class RegionPaletteBuilder
             palette.Add(new ColorPalette { R = cr, G = cg, B = cb, PixelCount = areas[r] });
         }
 
-        return palette.OrderByDescending(p => p.PixelCount).ToList();
+        return [.. palette.OrderByDescending(p => p.PixelCount)];
     }
 
     private static void AddEdge(HashSet<long> edges, int a, int b, int n)

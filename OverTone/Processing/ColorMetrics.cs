@@ -14,10 +14,7 @@ public static class ColorMetrics
     /// <param name="a">First color.</param>
     /// <param name="b">Second color.</param>
     /// <returns>Euclidean distance (0..~441.67).</returns>
-    public static double EuclideanRgbDistance(ColorPalette a, ColorPalette b)
-    {
-        return EuclideanRgbDistance(a.R, a.G, a.B, b.R, b.G, b.B);
-    }
+    public static double EuclideanRgbDistance(ColorPalette a, ColorPalette b) => EuclideanRgbDistance(a.R, a.G, a.B, b.R, b.G, b.B);
 
     /// <summary>
     /// Computes the Euclidean distance between two RGB triplets.

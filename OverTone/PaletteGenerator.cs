@@ -29,7 +29,7 @@ public class PaletteGenerator
     /// <param name="extractors">The extractors to make available.</param>
     public PaletteGenerator(IEnumerable<IColorPaletteExtractor> extractors)
     {
-        _colorPaletteExtractors = new Dictionary<PaletteAlgorithm, IColorPaletteExtractor>();
+        _colorPaletteExtractors = [];
         foreach (var extractor in extractors)
             _colorPaletteExtractors.TryAdd(extractor.Algorithm, extractor);
     }

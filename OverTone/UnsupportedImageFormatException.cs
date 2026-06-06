@@ -5,8 +5,7 @@ namespace OverTone;
 /// magic bytes up front means untrusted or mislabeled input (a renamed script, a truncated upload, an
 /// HTML error page returned by a URL, etc.) is rejected before it ever reaches the image decoder.
 /// </summary>
-public sealed class UnsupportedImageFormatException : Exception
+/// <remarks>Creates the exception with a descriptive message.</remarks>
+public sealed class UnsupportedImageFormatException(string message) : Exception(message)
 {
-    /// <summary>Creates the exception with a descriptive message.</summary>
-    public UnsupportedImageFormatException(string message) : base(message) { }
 }

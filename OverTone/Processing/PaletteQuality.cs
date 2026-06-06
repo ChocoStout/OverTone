@@ -174,6 +174,6 @@ public static class PaletteQuality
         for (var c = 0; c < palette.Count; c++)
             palette[c].PixelCount = (int)Math.Min(int.MaxValue, counts[c]);
 
-        return palette.Where(p => p.PixelCount > 0).OrderByDescending(p => p.PixelCount).ToList();
+        return [.. palette.Where(p => p.PixelCount > 0).OrderByDescending(p => p.PixelCount)];
     }
 }

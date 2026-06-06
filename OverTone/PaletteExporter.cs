@@ -26,7 +26,7 @@ public class PaletteExporter
     /// <param name="exporters">The exporters to make available.</param>
     public PaletteExporter(IEnumerable<IPaletteExporter> exporters)
     {
-        _exporters = new Dictionary<PaletteExportFormat, IPaletteExporter>();
+        _exporters = [];
         foreach (var exporter in exporters)
             _exporters.TryAdd(exporter.Format, exporter);
     }

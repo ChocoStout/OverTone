@@ -541,7 +541,7 @@ internal static class Program
 
         PaletteExportFormat[] selected;
         if (choice.Equals("A", StringComparison.OrdinalIgnoreCase))
-            selected = ExportFormats.Select(f => f.Format).ToArray();
+            selected = [.. ExportFormats.Select(f => f.Format)];
         else if (int.TryParse(choice, out var n) && n >= 1 && n <= ExportFormats.Length)
             selected = [ExportFormats[n - 1].Format];
         else
@@ -588,7 +588,7 @@ internal static class Program
             return "palette";
 
         var invalid = Path.GetInvalidFileNameChars();
-        var cleaned = new string(name.Select(ch => invalid.Contains(ch) ? '_' : ch).ToArray()).Trim();
+        var cleaned = new string([.. name.Select(ch => invalid.Contains(ch) ? '_' : ch)]).Trim();
         return string.IsNullOrWhiteSpace(cleaned) ? "palette" : cleaned;
     }
 

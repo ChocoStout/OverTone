@@ -7,19 +7,13 @@ namespace OverTone.Theming;
 /// Build one with <see cref="FromSeed(Rgb, SchemeOptions)"/> or
 /// <see cref="PaletteSchemeExtensions.BuildScheme"/>; serialize it with the <c>AsCss</c> helpers.
 /// </summary>
-public sealed class ColorScheme
+/// <remarks>Creates a scheme from a resolved role map.</remarks>
+public sealed class ColorScheme(ThemeMode mode, IReadOnlyDictionary<ColorRole, RoleColor> roles)
 {
-    private readonly IReadOnlyDictionary<ColorRole, RoleColor> _roles;
-
-    /// <summary>Creates a scheme from a resolved role map.</summary>
-    public ColorScheme(ThemeMode mode, IReadOnlyDictionary<ColorRole, RoleColor> roles)
-    {
-        Mode = mode;
-        _roles = roles;
-    }
+    private readonly IReadOnlyDictionary<ColorRole, RoleColor> _roles = roles;
 
     /// <summary>The mode this scheme is tuned for.</summary>
-    public ThemeMode Mode { get; }
+    public ThemeMode Mode { get; } = mode;
 
     /// <summary>All resolved roles, for iteration and token export.</summary>
     public IReadOnlyDictionary<ColorRole, RoleColor> Roles => _roles;

@@ -34,8 +34,8 @@ internal static class TestCard
         return EncodeBmp24(Width, Height, x =>
         {
             var band = Math.Min(x / bandWidth, Colors.Length - 1);
-            var c = Colors[band];
-            return (c.R, c.G, c.B);
+            var (Name, R, G, B) = Colors[band];
+            return (R, G, B);
         });
     }
 

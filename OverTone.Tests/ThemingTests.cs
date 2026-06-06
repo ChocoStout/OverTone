@@ -150,7 +150,7 @@ public class ThemingTests
         Assert.NotNull(primary.Ramp);
         Assert.Equal(11, primary.Ramp!.Count);
         Assert.Equal([50, 100, 200, 300, 400, 500, 600, 700, 800, 900, 950],
-            primary.Ramp.Select(s => s.Step).ToArray());
+            [.. primary.Ramp.Select(s => s.Step)]);
 
         var lastL = double.MaxValue;
         foreach (var shade in primary.Ramp)

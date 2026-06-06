@@ -54,11 +54,11 @@ internal static class TestCardImage
             for (var x = 0; x < Width; x++)
             {
                 var band = Math.Min(x / bandWidth, Colors.Length - 1);
-                var c = Colors[band];
+                var (Name, R, G, B) = Colors[band];
                 var o = rowStart + x * 3;
-                buffer[o] = c.B;
-                buffer[o + 1] = c.G;
-                buffer[o + 2] = c.R;
+                buffer[o] = B;
+                buffer[o + 1] = G;
+                buffer[o + 2] = R;
             }
         }
 

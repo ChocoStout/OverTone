@@ -161,7 +161,7 @@ public static class PalettePostProcessing
             }
         }
 
-        return selected.Select(i => candidates[i]).ToList();
+        return [.. selected.Select(i => candidates[i])];
     }
 
     /// <summary>
