@@ -2,6 +2,11 @@ using OverTone;
 
 namespace OverTone.Processing;
 
+/// <summary>
+/// Post-processing that narrows an extractor's raw candidate colors into a final palette: perceptual
+/// near-duplicate removal (CIE76 or OkLab) and the selection strategies behind
+/// <see cref="PaletteSelectionMode"/> — diverse (farthest-point) and salient (chroma × area).
+/// </summary>
 public static class PalettePostProcessing
 {
     /// <summary>
@@ -19,10 +24,10 @@ public static class PalettePostProcessing
         {
             var isDistinct = result.All(accepted => !(ColorMetrics.EuclideanRgbDistance(candidate, accepted) < minRgbDistance));
 
-            if (isDistinct) 
+            if (isDistinct)
                 result.Add(candidate);
 
-            if (result.Count == input.Count) 
+            if (result.Count == input.Count)
                 break;
         }
 
@@ -42,13 +47,44 @@ public static class PalettePostProcessing
 
         foreach (var candidate in input.OrderByDescending(p => p.PixelCount))
         {
-            var labCandidate = ConvertRgbToLab(candidate.R, candidate.G, candidate.B);
-            var isDistinct = result.Select(accepted => ConvertRgbToLab(accepted.R, accepted.G, accepted.B)).All(labAccepted => !(ComputeDeltaE(labCandidate, labAccepted) < minDeltaE));
+            var labCandidate = ColorMetrics.RgbToLab(candidate.R, candidate.G, candidate.B);
+            var isDistinct = result
+                .Select(accepted => ColorMetrics.RgbToLab(accepted.R, accepted.G, accepted.B))
+                .All(labAccepted => !(ColorMetrics.DeltaE76(labCandidate, labAccepted) < minDeltaE));
 
-            if (isDistinct) 
+            if (isDistinct)
                 result.Add(candidate);
 
-            if (maxCount.HasValue && result.Count >= maxCount.Value) 
+            if (maxCount.HasValue && result.Count >= maxCount.Value)
+                break;
+        }
+
+        return result;
+    }
+
+    /// <summary>
+    /// Remove near-duplicate colors using perceptual distance in OkLab space. OkLab is more uniform than
+    /// CIELAB (especially in the blues), so this groups true look-alikes better — used to return
+    /// <em>distinct</em> colors (not five shades of cream). Note the threshold scale: ~0.045, not ~12.
+    /// </summary>
+    /// <param name="input">Candidate palette entries.</param>
+    /// <param name="minDistance">Minimum OkLab ΔE required between returned colors.</param>
+    /// <param name="maxCount">Optional maximum number of colors to return.</param>
+    public static List<ColorPalette> RemoveNearDuplicateByOkLab(List<ColorPalette> input, double minDistance = 0.045, int? maxCount = null)
+    {
+        var result = new List<ColorPalette>();
+
+        foreach (var candidate in input.OrderByDescending(p => p.PixelCount))
+        {
+            var okCandidate = ColorMetrics.RgbToOkLab(candidate.R, candidate.G, candidate.B);
+            var isDistinct = result
+                .Select(accepted => ColorMetrics.RgbToOkLab(accepted.R, accepted.G, accepted.B))
+                .All(okAccepted => ColorMetrics.DeltaEOk(okCandidate, okAccepted) >= minDistance);
+
+            if (isDistinct)
+                result.Add(candidate);
+
+            if (maxCount.HasValue && result.Count >= maxCount.Value)
                 break;
         }
 
@@ -74,7 +110,7 @@ public static class PalettePostProcessing
 
         // Pre-compute Lab for every candidate once.
         var labs = candidates
-            .Select(c => ConvertRgbToLab(c.R, c.G, c.B))
+            .Select(c => ColorMetrics.RgbToLab(c.R, c.G, c.B))
             .ToArray();
 
         var selected  = new List<int>(count);
@@ -91,7 +127,7 @@ public static class PalettePostProcessing
 
         // Update min-distances from the seed.
         for (var i = 0; i < candidates.Count; i++)
-            minDistTo[i] = ComputeDeltaE(labs[seed], labs[i]);
+            minDistTo[i] = ColorMetrics.DeltaE76(labs[seed], labs[i]);
 
         while (selected.Count < count)
         {
@@ -109,69 +145,79 @@ public static class PalettePostProcessing
                 }
             }
 
-            if (best == -1) break;
+            // Stop if no candidate remains, or the farthest one is an exact perceptual duplicate of
+            // an already-selected color (Lab distance 0). This happens when the image has fewer
+            // distinct colors than requested — return fewer colors rather than emitting duplicates.
+            if (best == -1 || bestDist <= 0.0) break;
 
             selected.Add(best);
 
             // Update running min-distances using the newly added color.
             for (var i = 0; i < candidates.Count; i++)
             {
-                var d = ComputeDeltaE(labs[best], labs[i]);
+                var d = ColorMetrics.DeltaE76(labs[best], labs[i]);
                 if (d < minDistTo[i])
                     minDistTo[i] = d;
             }
         }
 
-        return selected.Select(i => candidates[i]).ToList();
-    }
-
-
-    private static (double L, double a, double b) ConvertRgbToLab(byte r8, byte g8, byte b8)
-    {
-        var r = SrgbByteToLinear(r8);
-        var g = SrgbByteToLinear(g8);
-        var b = SrgbByteToLinear(b8);
-
-        // Convert linear RGB to XYZ (D65)
-        var x = r * 0.4124564 + g * 0.3575761 + b * 0.1804375;
-        var y = r * 0.2126729 + g * 0.7151522 + b * 0.0721750;
-        var z = r * 0.0193339 + g * 0.1191920 + b * 0.9503041;
-
-        // Normalize for D65 white point
-        var xn = x / 0.95047;
-        var yn = y / 1.00000;
-        var zn = z / 1.08883;
-
-        var fx = F(xn);
-        var fy = F(yn);
-        var fz = F(zn);
-
-        var l = 116.0 * fy - 16.0;
-        var a = 500.0 * (fx - fy);
-        var bLab = 200.0 * (fy - fz);
-
-        return (l, a, bLab);
-
-        double F(double t) => t > 0.008856 ? Math.Pow(t, 1.0 / 3.0) : (7.787037 * t + 16.0 / 116.0);
+        return [.. selected.Select(i => candidates[i])];
     }
 
     /// <summary>
-    /// Compute CIE76 Delta-E between two Lab values.
+    /// Selects up to <paramref name="count"/> colors by <em>saliency</em> — a blend of chroma and area
+    /// tuned so a small but vivid region (e.g. lips) can outrank a large dull one (e.g. sky), while a
+    /// dominant neutral still surfaces. Candidates are ranked by saliency, then near-duplicates are
+    /// dropped by perceptual ΔE. This is the selection that surfaces "the colors a person would name",
+    /// and it relies on the extractor having emitted <em>representative</em> (peak) colors, not means.
     /// </summary>
-    private static double ComputeDeltaE((double L, double a, double b) lab1, (double L, double a, double b) lab2)
+    /// <param name="candidates">Candidate colors, each with a real <see cref="ColorPalette.PixelCount"/>.</param>
+    /// <param name="count">Maximum number of colors to return.</param>
+    /// <param name="minDeltaE">Minimum CIE76 ΔE required between returned colors.</param>
+    /// <param name="chromaWeight">Exponent on normalized chroma (default 0.6).</param>
+    /// <param name="areaWeight">Exponent on area fraction (default 0.5 — sub-linear, so huge regions saturate).</param>
+    public static List<ColorPalette> SelectSalient(
+        List<ColorPalette> candidates, int count,
+        double minDeltaE = 12.0, double chromaWeight = 0.6, double areaWeight = 0.5)
     {
-        var dL = lab1.L - lab2.L;
-        var da = lab1.a - lab2.a;
-        var db = lab1.b - lab2.b;
-        return Math.Sqrt(dL * dL + da * da + db * db);
+        if (candidates.Count == 0 || count <= 0)
+            return [];
+
+        double totalArea = candidates.Sum(c => (long)c.PixelCount);
+        if (totalArea <= 0) totalArea = 1;
+
+        var ranked = candidates
+            .OrderByDescending(c => Saliency(c, totalArea, chromaWeight, areaWeight))
+            .ThenByDescending(c => c.PixelCount)
+            .ToList();
+
+        var result = new List<ColorPalette>(Math.Min(count, ranked.Count));
+        foreach (var candidate in ranked)
+        {
+            var labCandidate = ColorMetrics.RgbToLab(candidate.R, candidate.G, candidate.B);
+            var distinct = result.All(accepted =>
+                ColorMetrics.DeltaE76(labCandidate, ColorMetrics.RgbToLab(accepted.R, accepted.G, accepted.B)) >= minDeltaE);
+
+            if (distinct)
+                result.Add(candidate);
+
+            if (result.Count >= count)
+                break;
+        }
+
+        return result;
     }
 
     /// <summary>
-    /// Convert an sRGB byte component (0..255) to linear RGB (0..1).
+    /// Saliency score: <c>(chromaNorm + ε)^chromaWeight · areaFrac^areaWeight + 0.15 · areaFrac</c>.
+    /// The additive term is a neutral floor: a dominant achromatic region (black/white) still scores in
+    /// proportion to its area even when its chroma is ~0 — without it, multiplying by zero chroma would
+    /// erase neutrals from the palette entirely.
     /// </summary>
-    private static double SrgbByteToLinear(byte v)
+    public static double Saliency(ColorPalette c, double totalArea, double chromaWeight = 0.6, double areaWeight = 0.5)
     {
-        var s = v / 255.0;
-        return s <= 0.04045 ? s / 12.92 : Math.Pow((s + 0.055) / 1.055, 2.4);
+        var chromaNorm = Math.Clamp(ColorMetrics.LabChroma(c.R, c.G, c.B) / 90.0, 0.0, 1.0);
+        var areaFrac = c.PixelCount / totalArea;
+        return Math.Pow(chromaNorm + 0.05, chromaWeight) * Math.Pow(areaFrac, areaWeight) + 0.15 * areaFrac;
     }
 }

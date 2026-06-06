@@ -1,0 +1,220 @@
+@page "/theme"
+@rendermode InteractiveServer
+@using OverTone.Theming
+@inject PaletteGenerator Generator
+@inject IHttpClientFactory HttpFactory
+
+<h1>OverTone — Theme Builder</h1>
+<p class="sub">
+    Pick a seed color (or pull one from an image) and OverTone synthesizes a full, WCAG-compliant scheme —
+    primary, secondary, tertiary, status colors, and surfaces — each with a matching, contrast-checked text
+    color, plus a light/dark switch. Every swatch below shows its real <em>on</em>-color as the label.
+</p>
+
+<div class="controls">
+    <label>Seed
+        <input type="color" value="@_seed" @oninput="OnSeedColor" />
+    </label>
+    <input type="text" @bind="_seedText" @bind:event="oninput" @bind:after="OnSeedText" />
+    <label class="btn">From image…<InputFile OnChange="OnImage" accept="image/*" style="display:none" /></label>
+    <span class="url-group">
+        <input type="url" placeholder="https://… image URL" @bind="_url" @bind:event="oninput" />
+        <button class="btn" @onclick="LoadUrl" disabled="@(_busy || string.IsNullOrWhiteSpace(_url))">Load URL</button>
+    </span>
+
+    <label>Harmony
+        <select @bind="_harmony" @bind:after="Rebuild">
+            <option value="@Harmony.Analogous">Analogous</option>
+            <option value="@Harmony.Complementary">Complementary</option>
+            <option value="@Harmony.Triadic">Triadic</option>
+            <option value="@Harmony.SplitComplementary">Split-complementary</option>
+        </select>
+    </label>
+    <label><input type="checkbox" @bind="_ramps" @bind:after="Rebuild" /> Tonal ramps</label>
+
+    <span class="toggle">
+        <button class="btn @(_mode == ThemeMode.Light ? "on" : "")" @onclick="@(() => _mode = ThemeMode.Light)">Light</button>
+        <button class="btn @(_mode == ThemeMode.Dark ? "on" : "")" @onclick="@(() => _mode = ThemeMode.Dark)">Dark</button>
+    </span>
+</div>
+
+@if (_error is not null)
+{
+    <div class="error">@_error</div>
+}
+
+@if (_imageSrc is not null)
+{
+    <figure class="theme-source">
+        <img src="@_imageSrc" alt="seed image" />
+        <figcaption>Seed pulled from this image → <span class="src-hex">@_seed</span></figcaption>
+    </figure>
+}
+
+@if (_pair is not null)
+{
+    var s = _mode == ThemeMode.Light ? _pair.Light : _pair.Dark;
+
+    <div class="roles">
+        @foreach (var (label, color, on) in MainRoles(s))
+        {
+            <div class="role" style="background:@color.Hex; color:@on.Hex">
+                <span class="role-name">@label</span>
+                <span class="role-hex">@color.Hex</span>
+            </div>
+        }
+    </div>
+
+    @if (_ramps)
+    {
+        <h3>Tonal ramps</h3>
+        @foreach (var (label, ramp) in Ramps(s))
+        {
+            <div class="ramp">
+                <span class="ramp-label">@label</span>
+                @foreach (var shade in ramp)
+                {
+                    <span class="shade" style="background:@shade.Color.Hex" title="@label @shade.Step · @shade.Color.Hex"></span>
+                }
+            </div>
+        }
+    }
+
+    <h3>CSS</h3>
+    <pre class="css">@_css</pre>
+}
+
+@code {
+    private string _seed = "#285AD2";
+    private string _seedText = "#285AD2";
+    private string _url = "";
+    private string? _imageSrc;
+    private bool _busy;
+    private Harmony _harmony = Harmony.Analogous;
+    private bool _ramps;
+    private ThemeMode _mode = ThemeMode.Light;
+    private ThemePair? _pair;
+    private string _css = "";
+    private string? _error;
+
+    protected override void OnInitialized() => Rebuild();
+
+    private void OnSeedColor(ChangeEventArgs e)
+    {
+        _seed = e.Value?.ToString() ?? _seed;
+        _seedText = _seed;
+        _imageSrc = null;
+        Rebuild();
+    }
+
+    private void OnSeedText()
+    {
+        if (!string.IsNullOrWhiteSpace(_seedText))
+        {
+            _seed = _seedText.Trim();
+            _imageSrc = null;
+            Rebuild();
+        }
+    }
+
+    private async Task OnImage(InputFileChangeEventArgs e)
+    {
+        _error = null;
+        _busy = true;
+        try
+        {
+            using var ms = new MemoryStream();
+            await e.File.OpenReadStream(16L * 1024 * 1024).CopyToAsync(ms);
+            var bytes = ms.ToArray();
+            await SeedFromImage(bytes, DataUrl(bytes, e.File.ContentType));
+        }
+        catch (Exception ex)
+        {
+            _error = ex.Message;
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task LoadUrl()
+    {
+        if (string.IsNullOrWhiteSpace(_url)) return;
+        _error = null;
+        _busy = true;
+        try
+        {
+            var client = HttpFactory.CreateClient();
+            client.Timeout = TimeSpan.FromSeconds(30);
+            var bytes = await client.GetByteArrayAsync(_url.Trim());
+            await SeedFromImage(bytes, _url.Trim());   // the browser loads the URL directly for the preview
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't load that URL: {ex.Message}";
+        }
+        finally
+        {
+            _busy = false;
+        }
+    }
+
+    private async Task SeedFromImage(byte[] bytes, string previewSrc)
+    {
+        var palette = await Generator.GetColorsAsync(bytes, 6);
+        if (palette.Count == 0)
+        {
+            _error = "No colors could be extracted from that image.";
+            return;
+        }
+        _seed = palette[0].AsHex;
+        _seedText = _seed;
+        _imageSrc = previewSrc;
+        Rebuild();
+    }
+
+    private static string DataUrl(byte[] bytes, string? contentType)
+        => $"data:{(string.IsNullOrWhiteSpace(contentType) ? "image/png" : contentType)};base64,{Convert.ToBase64String(bytes)}";
+
+    private void Rebuild()
+    {
+        _error = null;
+        try
+        {
+            _pair = ColorScheme.BuildThemePair(_seed, new SchemeOptions { Harmony = _harmony, IncludeRamps = _ramps });
+            _css = _pair.AsCss();
+        }
+        catch (Exception ex)
+        {
+            _error = $"Couldn't build a theme from '{_seed}': {ex.Message}";
+            _pair = null;
+        }
+    }
+
+    private static IEnumerable<(string Label, Rgb Color, Rgb On)> MainRoles(ColorScheme s) =>
+    [
+        ("Primary", s.Primary, s.OnPrimary),
+        ("Secondary", s.Secondary, s.OnSecondary),
+        ("Tertiary", s.Tertiary, s.OnTertiary),
+        ("Surface", s.Surface, s.OnSurface),
+        ("Background", s.Background, s.OnBackground),
+        ("Success", s.Success, s.OnSuccess),
+        ("Warning", s.Warning, s.OnWarning),
+        ("Error", s.Error, s.OnError),
+        ("Info", s.Info, s.OnInfo),
+    ];
+
+    private static IEnumerable<(string Label, IReadOnlyList<Shade> Ramp)> Ramps(ColorScheme s)
+    {
+        (ColorRole Role, string Label)[] ramped =
+        [
+            (ColorRole.Primary, "Primary"), (ColorRole.Secondary, "Secondary"), (ColorRole.Tertiary, "Tertiary"),
+            (ColorRole.Neutral, "Neutral"), (ColorRole.Success, "Success"), (ColorRole.Warning, "Warning"),
+            (ColorRole.Error, "Error"), (ColorRole.Info, "Info"),
+        ];
+        foreach (var (role, label) in ramped)
+            if (s.TryGet(role, out var rc) && rc.Ramp is { } ramp)
+                yield return (label, ramp);
+    }
+}

@@ -1,395 +1,793 @@
-﻿using System.Text;
-using System.Runtime.Versioning;
+using System.Diagnostics;
+using System.Text;
+using System.Text.Json;
+using System.Text.Json.Nodes;
+using OverTone.Processing;
+using OverTone.Theming;
 
-namespace OverTone.Sample
+namespace OverTone.Sample;
+
+internal static class Program
 {
-    internal static class Program
+    // ── ANSI helpers ──────────────────────────────────────────────────────────
+    private static bool AnsiSupported =>
+        !Console.IsOutputRedirected &&
+        (Environment.GetEnvironmentVariable("WT_SESSION") is not null          // Windows Terminal
+         || Environment.GetEnvironmentVariable("TERM_PROGRAM") is not null     // iTerm2 / VS Code
+         || (Environment.GetEnvironmentVariable("TERM") is { } t
+             && (t.Contains("color", StringComparison.OrdinalIgnoreCase) || t.Contains("xterm"))));
+
+    private static string Fg(byte r, byte g, byte b, string text) =>
+        AnsiSupported ? $"\e[38;2;{r};{g};{b}m{text}\e[0m" : text;
+
+    private static string Bg(byte r, byte g, byte b, string text) =>
+        AnsiSupported ? $"\e[48;2;{r};{g};{b}m{text}\e[0m" : text;
+
+    private static string Bold(string text) => AnsiSupported ? $"\e[1m{text}\e[0m" : text;
+    private static string Dim(string text) => AnsiSupported ? $"\e[2m{text}\e[0m" : text;
+
+    // ── Algorithms offered in the extract menu ──────────────────────────────────
+    private static readonly (PaletteAlgorithm Algorithm, string Label, PaletteSelectionMode Selection)[] Algorithms =
+    [
+        (PaletteAlgorithm.Slic,          "SLIC · Salient",        PaletteSelectionMode.Salient),
+        (PaletteAlgorithm.Slic,          "SLIC · Diverse",        PaletteSelectionMode.Diverse),
+        (PaletteAlgorithm.Slic,          "SLIC · Dominant",       PaletteSelectionMode.Dominant),
+        (PaletteAlgorithm.SpatialKMeans, "Spatial K-Means",       PaletteSelectionMode.Salient),
+    ];
+
+    // Distinct algorithms compared head-to-head (all in Diverse mode for a fair comparison).
+    private static readonly (PaletteAlgorithm Algorithm, string Label)[] CompareSet =
+    [
+        (PaletteAlgorithm.Slic,          "SLIC"),
+        (PaletteAlgorithm.SpatialKMeans, "Spatial K-Means"),
+    ];
+
+    private static readonly (PaletteExportFormat Format, string Label)[] ExportFormats =
+    [
+        (PaletteExportFormat.Json,     "JSON"),
+        (PaletteExportFormat.HexList,  "Hex list"),
+        (PaletteExportFormat.CArray,   "C array"),
+        (PaletteExportFormat.Css,      "CSS"),
+        (PaletteExportFormat.Scss,     "SCSS"),
+        (PaletteExportFormat.Tailwind, "Tailwind"),
+    ];
+
+    private static readonly PaletteGenerator Generator = new();
+    private static readonly PaletteExporter Exporter = new();
+    private static readonly HttpClient Http = new();
+
+    // A loaded image, kept in memory so the user can re-extract and compare without reloading.
+    private sealed record ImageSource(byte[] Data, string Label, string DefaultName);
+
+    // One algorithm's result within a "run all" comparison.
+    private sealed record AlgorithmRun(string Label, List<ColorPalette> Palette, double DeltaE, double ElapsedMs);
+
+    // ── Entry point ───────────────────────────────────────────────────────────
+    private static async Task Main(string[] args)
     {
-        // ── ANSI helpers ──────────────────────────────────────────────────────────
-        private static bool AnsiSupported =>
-            !Console.IsOutputRedirected &&
-            (Environment.GetEnvironmentVariable("WT_SESSION") is not null          // Windows Terminal
-             || Environment.GetEnvironmentVariable("TERM_PROGRAM") is not null     // iTerm2 / VS Code
-             || (Environment.GetEnvironmentVariable("TERM") is { } t
-                 && (t.Contains("color", StringComparison.OrdinalIgnoreCase) || t.Contains("xterm"))));
+        try { Console.OutputEncoding = Encoding.UTF8; }
+        catch { /* some redirected/limited consoles reject this; ignore */ }
 
-        private static string Fg(byte r, byte g, byte b, string text) =>
-            AnsiSupported ? $"\e[38;2;{r};{g};{b}m{text}\e[0m" : text;
-
-        private static string Bg(byte r, byte g, byte b, string text) =>
-            AnsiSupported ? $"\e[48;2;{r};{g};{b}m{text}\e[0m" : text;
-
-        private static string Bold(string text) =>
-            AnsiSupported ? $"\e[1m{text}\e[0m" : text;
-
-        private static string Dim(string text) =>
-            AnsiSupported ? $"\e[2m{text}\e[0m" : text;
-
-        // ── Algorithms ────────────────────────────────────────────────────────────
-        private static readonly (PaletteAlgorithm Algorithm, string Label, bool Dedupe)[] Algorithms =
-        [
-            (PaletteAlgorithm.KMeans,      "K-Means",              false),
-            (PaletteAlgorithm.MedianCut,   "Median Cut",           false),
-            (PaletteAlgorithm.Octree,      "Octree",               false),
-            (PaletteAlgorithm.FuzzyCMeans, "Fuzzy C-Means",        false),
-            (PaletteAlgorithm.Popularity,  "Popularity",           false),
-            (PaletteAlgorithm.Wu,          "Wu Quantization",      false),
-            (PaletteAlgorithm.NeuQuant,    "NeuQuant",             false),
-            (PaletteAlgorithm.NeuQuant,    "NeuQuant (Iterative)", true),
-        ];
-
-        private static readonly PaletteGenerator Generator = new();
-
-        // ── Entry point ───────────────────────────────────────────────────────────
-        [STAThread]
-        [SupportedOSPlatform("windows")]
-        private static void Main() => MainAsync().GetAwaiter().GetResult();
-
-        private static async Task MainAsync()
+        // --make-testcard [file]: write the built-in, known-palette test card and exit.
+        var makeIndex = Array.FindIndex(args, a => a is "--make-testcard");
+        if (makeIndex >= 0)
         {
-            Console.OutputEncoding = Encoding.UTF8;
+            var target = makeIndex + 1 < args.Length && !args[makeIndex + 1].StartsWith('-') ? args[makeIndex + 1] : null;
+            MakeTestCardFile(target);
+            return;
+        }
 
-            while (true)
+        // --theme #RRGGBB: synthesize and print a light/dark accessible CSS theme, then exit.
+        var themeIndex = Array.FindIndex(args, a => a is "--theme");
+        if (themeIndex >= 0)
+        {
+            var seed = themeIndex + 1 < args.Length && !args[themeIndex + 1].StartsWith('-')
+                ? args[themeIndex + 1]
+                : "#285AD2";
+            PrintTheme(seed);
+            return;
+        }
+
+        var (source, jsonRequested, jsonPath, colorCount) = ParseArgs(args);
+
+        // Non-interactive: run every algorithm and dump the results to JSON, then exit.
+        if (source is not null && jsonRequested)
+        {
+            await RunBatchJsonAsync(source, jsonPath, colorCount);
+            return;
+        }
+
+        // A bare image path/URL jumps straight into a session.
+        if (source is not null)
+        {
+            var img = await LoadSource(source);
+            if (img is not null && await SessionLoop(img))
+                return;
+        }
+
+        await MainMenu();
+    }
+
+    // Parses: <image-path-or-url>  [--json [file]]  [--colors N]
+    private static (string? Source, bool Json, string? JsonPath, int ColorCount) ParseArgs(string[] args)
+    {
+        string? source = null;
+        string? jsonPath = null;
+        var json = false;
+        var colorCount = 6;
+
+        for (var i = 0; i < args.Length; i++)
+        {
+            var a = args[i];
+            if (a is "--json" or "-j")
             {
-                DrawBanner();
+                json = true;
+                if (i + 1 < args.Length && !args[i + 1].StartsWith('-'))
+                    jsonPath = args[++i];
+            }
+            else if ((a is "--colors" or "-c") && i + 1 < args.Length && int.TryParse(args[i + 1], out var n) && n > 0)
+            {
+                colorCount = n;
+                i++;
+            }
+            else if (!a.StartsWith('-') && source is null)
+            {
+                source = a;
+            }
+        }
 
-                Console.WriteLine($"  {Bold("1)")} Open image file");
-                Console.WriteLine($"  {Bold("2)")} Load image from URL");
-                Console.WriteLine($"  {Bold("3)")} Exit");
-                Console.WriteLine();
-                Console.Write("  Select › ");
+        return (source, json, jsonPath, colorCount);
+    }
 
-                switch (Console.ReadKey(true).KeyChar)
+    // ── "Run all" → JSON (non-interactive, for gathering data) ───────────────────
+    private static async Task RunBatchJsonAsync(string source, string? jsonPath, int colorCount)
+    {
+        var img = await LoadSource(source);
+        if (img is null)
+            return; // LoadSource already reported the error
+
+        var results = await RunAllAsync(img, colorCount);
+        if (results.Count == 0)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} No algorithm produced a result.");
+            return;
+        }
+
+        var path = Path.GetFullPath(jsonPath ?? $"{img.DefaultName}.results.json");
+        WriteResultsJson(img, colorCount, results, path);
+        Console.WriteLine($"  {Fg(0, 230, 120, "✔")} Wrote {results.Count} algorithm results to {Dim(path)}");
+    }
+
+    // Writes the built-in test card to disk (default overtone-testcard.bmp) and prints its known palette.
+    private static void MakeTestCardFile(string? path)
+    {
+        var target = Path.GetFullPath(string.IsNullOrWhiteSpace(path) ? "overtone-testcard.bmp" : path);
+        try
+        {
+            File.WriteAllBytes(target, TestCard.CreateBmp());
+            Console.WriteLine($"  {Fg(0, 230, 120, "✔")} Wrote the built-in test card to {Dim(target)}");
+            Console.WriteLine(Dim($"  {TestCard.Colors.Length} known colors: " +
+                string.Join("  ", TestCard.Colors.Select(c => $"#{c.R:X2}{c.G:X2}{c.B:X2}"))));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {ex.Message}");
+        }
+    }
+
+    // Synthesizes a light + dark accessible theme from a seed color and prints it (demonstrates OverTone.Theming).
+    private static void PrintTheme(string seedHex)
+    {
+        ThemePair pair;
+        try
+        {
+            pair = ColorScheme.BuildThemePair(seedHex);
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {ex.Message}");
+            return;
+        }
+
+        foreach (var (label, scheme) in new[] { ("Light", pair.Light), ("Dark", pair.Dark) })
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  {Bold(label + " scheme")} {Dim("· seed " + seedHex)}");
+            PrintRole("primary", scheme.Primary, scheme.OnPrimary);
+            PrintRole("secondary", scheme.Secondary, scheme.OnSecondary);
+            PrintRole("tertiary", scheme.Tertiary, scheme.OnTertiary);
+            PrintRole("surface", scheme.Surface, scheme.OnSurface);
+            PrintRole("error", scheme.Error, scheme.OnError);
+        }
+
+        Console.WriteLine();
+        Console.WriteLine(pair.AsCss());
+    }
+
+    private static void PrintRole(string name, Rgb color, Rgb on)
+    {
+        var swatch = AnsiSupported
+            ? $"\e[48;2;{color.R};{color.G};{color.B}m\e[38;2;{on.R};{on.G};{on.B}m  Aa  \e[0m"
+            : $"[{color.Hex}/{on.Hex}]";
+        Console.WriteLine($"    {swatch}  {name,-10} {color.Hex}  {Dim("on " + on.Hex)}");
+    }
+
+    // ── Main menu ───────────────────────────────────────────────────────────────
+    private static async Task MainMenu()
+    {
+        while (true)
+        {
+            DrawBanner();
+            Console.WriteLine($"  {Bold("1)")} Open image file");
+            Console.WriteLine($"  {Bold("2)")} Load image from URL");
+            Console.WriteLine($"  {Bold("3)")} Use the built-in test card {Dim("(12 known colors)")}");
+            Console.WriteLine($"  {Bold("q)")} Exit");
+            Console.WriteLine();
+            Console.WriteLine(Dim("  Tip: pass an image path/URL (or 'testcard') as an argument to skip this menu."));
+            Console.WriteLine(Dim("       Add --json [file] to run all algorithms and dump results; --colors N sets the size;"));
+            Console.WriteLine(Dim("       --make-testcard [file] to save the test card; or --theme #RRGGBB for a CSS theme."));
+            Console.WriteLine();
+
+            switch (Prompt("  Select › "))
+            {
+                case null or "q" or "quit" or "exit":
+                    return;
+                case "1":
                 {
-                    case '1':
+                    var path = Prompt("  Image path › ");
+                    if (!string.IsNullOrWhiteSpace(path))
                     {
-                        var path = ShowFileDialog();
-                        if (!string.IsNullOrEmpty(path))
-                            await RunPipeline(source: path, isUrl: false);
-                        break;
+                        var img = await LoadSource(path);
+                        if (img is not null && await SessionLoop(img))
+                            return;
                     }
-                    case '2':
+                    break;
+                }
+                case "2":
+                {
+                    var url = Prompt("  Image URL › ");
+                    if (!string.IsNullOrWhiteSpace(url))
                     {
-                        Console.WriteLine();
-                        Console.Write("  Image URL › ");
-                        var url = Console.ReadLine()?.Trim();
-                        if (!string.IsNullOrWhiteSpace(url))
-                            await RunPipeline(source: url, isUrl: true);
-                        break;
+                        var img = await LoadSource(url);
+                        if (img is not null && await SessionLoop(img))
+                            return;
                     }
-                    case '3':
-                        Console.Clear();
+                    break;
+                }
+                case "3":
+                {
+                    var img = await LoadSource("testcard");
+                    if (img is not null && await SessionLoop(img))
                         return;
+                    break;
                 }
             }
         }
+    }
 
-        // ── Banner ────────────────────────────────────────────────────────────────
-        private static void DrawBanner()
+    // ── Per-image session (re-run without reloading) ─────────────────────────────
+    // Returns true when the user wants to quit the whole app, false to return to the main menu.
+    private static async Task<bool> SessionLoop(ImageSource img)
+    {
+        while (true)
         {
-            Console.Clear();
+            DrawBanner();
+            Console.WriteLine($"  {Bold("Loaded:")} {Dim(img.Label)}");
+            Console.WriteLine();
+            Console.WriteLine($"  {Bold("1)")} Get main colors {Dim("(no config)")}");
+            Console.WriteLine($"  {Bold("2)")} Extract a palette {Dim("(choose algorithm)")}");
+            Console.WriteLine($"  {Bold("3)")} Compare algorithms");
+            Console.WriteLine($"  {Bold("4)")} Open a different image");
+            Console.WriteLine($"  {Bold("q)")} Quit");
+            Console.WriteLine();
 
-            string[] lines =
-            [
-                @"   ___                 _____                    ",
-                @"  / _ \  __   __ ___  |_   _|  ___   _ __   ___",
-                @" | | | | \ \ / // _ \   | |   / _ \ | '_ \ / _ \",
-                @" | |_| |  \ V /|  __/   | |  | (_) || | | ||  __/",
-                @"  \___/    \_/  \___|   |_|   \___/ |_| |_| \___|",
-            ];
-
-            // Gradient: deep violet → electric cyan
-            (byte R, byte G, byte B)[] stops =
-            [
-                (138,  43, 226),
-                ( 99,  32, 243),
-                ( 60,  80, 255),
-                (  0, 180, 255),
-                (  0, 230, 230),
-            ];
-
-            for (var i = 0; i < lines.Length; i++)
+            switch (Prompt("  Select › "))
             {
-                var (r, g, b) = stops[i];
-                Console.WriteLine(AnsiSupported ? $"\e[38;2;{r};{g};{b}m{lines[i]}\e[0m" : lines[i]);
+                case null or "q" or "quit": return true;
+                case "1": await GetColorsFlow(img); break;
+                case "2": await ExtractFlow(img); break;
+                case "3": await CompareFlow(img); break;
+                case "4" or "b" or "back": return false;
+            }
+        }
+    }
+
+    // ── Load a source into memory (cross-platform: path prompt or URL) ───────────
+    private static async Task<ImageSource?> LoadSource(string input)
+    {
+        var trimmed = input.Trim().Trim('"');
+
+        // Built-in, known-palette image — handy for gathering comparable data with a "right answer".
+        if (trimmed.Equals("testcard", StringComparison.OrdinalIgnoreCase))
+            return new ImageSource(TestCard.CreateBmp(), "test card (built-in · 12 known colors)", "testcard");
+
+        var isUrl = Uri.TryCreate(trimmed, UriKind.Absolute, out var uri)
+                    && (uri.Scheme == Uri.UriSchemeHttp || uri.Scheme == Uri.UriSchemeHttps);
+
+        try
+        {
+            if (isUrl)
+            {
+                var data = await RunWithSpinner("  Downloading image", () => Http.GetByteArrayAsync(trimmed));
+                return new ImageSource(data, trimmed, DeriveUrlName(trimmed));
             }
 
-            Console.WriteLine(Dim("  Color Palette Extractor\n"));
+            var full = Path.GetFullPath(trimmed);
+            var bytes = await File.ReadAllBytesAsync(full);
+            return new ImageSource(bytes, Path.GetFileName(full), Sanitize(Path.GetFileNameWithoutExtension(full)));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine();
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} Could not load '{trimmed}': {ex.Message}");
+            Pause();
+            return null;
+        }
+    }
+
+    // ── Get the main colors, no configuration ────────────────────────────────────
+    private static async Task GetColorsFlow(ImageSource img)
+    {
+        DrawBanner();
+        Console.WriteLine($"  {Bold("Main colors")} {Dim("— no algorithm or settings to pick; region-aware and accent-preserving")}");
+        Console.WriteLine();
+
+        var colorCount = int.TryParse(Prompt("  Number of colors [6] › "), out var cc) && cc > 0 ? cc : 6;
+
+        List<ColorPalette> palette;
+        try
+        {
+            palette = await RunWithSpinner("  Finding the main colors",
+                () => Generator.GetColorsAsync(img.Data, colorCount, Environment.ProcessorCount));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} Failed: {ex.Message}");
+            Pause();
+            return;
         }
 
-        // ── File dialog ───────────────────────────────────────────────────────────
-        // OpenFileDialog requires an STA thread. After the first await in MainAsync the
-        // continuation runs on a thread-pool (MTA) thread, so we must spin up a fresh
-        // STA thread for the dialog instead of calling it directly.
-        private static string? ShowFileDialog()
+        DisplayPalette(palette, "Main colors", img.Label);
+        await PromptExport(palette, img);
+        Pause();
+    }
+
+    // ── Extract a single palette ─────────────────────────────────────────────────
+    private static async Task ExtractFlow(ImageSource img)
+    {
+        DrawBanner();
+        Console.WriteLine($"  {Bold("Choose an algorithm:")}\n");
+        for (var i = 0; i < Algorithms.Length; i++)
+            Console.WriteLine($"  {Bold($"{i + 1})")} {Algorithms[i].Label}");
+        Console.WriteLine();
+
+        var algInput = Prompt("  Algorithm [1] › ");
+        var algIndex = int.TryParse(algInput, out var ai) && ai >= 1 && ai <= Algorithms.Length ? ai - 1 : 0;
+        var (algorithm, algorithmLabel, selection) = Algorithms[algIndex];
+
+        var colorCount = int.TryParse(Prompt("  Number of colors [6] › "), out var cc) && cc > 0 ? cc : 6;
+
+        Console.WriteLine(Dim($"  Selection mode  1) Salient  2) Diverse  3) Dominant   [Enter to keep {selection}]"));
+        switch (Prompt("  Mode › "))
         {
-            string? result = null;
-
-            var thread = new Thread(() =>
-            {
-                using var ofd = new OpenFileDialog();
-                ofd.Filter = "Image Files|*.png;*.jpg;*.jpeg;*.bmp;*.gif;*.webp|All Files|*.*";
-                ofd.Title  = "Select an image";
-                result = ofd.ShowDialog() == DialogResult.OK ? ofd.FileName : null;
-            });
-
-            thread.SetApartmentState(ApartmentState.STA);
-            thread.Start();
-            thread.Join();
-
-            return result;
+            case "1": selection = PaletteSelectionMode.Salient; break;
+            case "2": selection = PaletteSelectionMode.Diverse; break;
+            case "3": selection = PaletteSelectionMode.Dominant; break;
         }
 
-        // ── Pipeline ──────────────────────────────────────────────────────────────
-        private static async Task RunPipeline(string source, bool isUrl)
+        List<ColorPalette> palette;
+        try
         {
-            Console.Clear();
-            Console.WriteLine();
+            palette = await RunWithSpinner($"  Extracting with {Bold(algorithmLabel)}",
+                () => Generator.ExtractColorPaletteAsync(img.Data, colorCount, algorithm, selection,
+                    maxDegreeOfParallelism: Environment.ProcessorCount));
+        }
+        catch (Exception ex)
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} Failed: {ex.Message}");
+            Pause();
+            return;
+        }
 
-            // ── Algorithm picker ──────────────────────────────────────────────────
-            Console.WriteLine($"  {Bold("Choose an algorithm:")}\n");
-            for (var i = 0; i < Algorithms.Length; i++)
-                Console.WriteLine($"  {Bold($"{i + 1})")} {Algorithms[i].Label}");
+        DisplayPalette(palette, $"{algorithmLabel} · {selection}", img.Label);
+        await PromptExport(palette, img);
+        Pause();
+    }
 
-            Console.WriteLine();
-            Console.Write("  Algorithm › ");
+    // ── Compare every algorithm on the same image (ΔE shown as info, not a ranking) ──
+    private static async Task CompareFlow(ImageSource img)
+    {
+        DrawBanner();
+        Console.WriteLine($"  {Bold("Compare algorithms")} {Dim("— same image, side by side")}");
+        Console.WriteLine();
 
-            var algChar = Console.ReadKey(true).KeyChar;
-            var algIndex = algChar - '1';
-            if (algIndex < 0 || algIndex >= Algorithms.Length)
-                algIndex = 0;
+        var colorCount = int.TryParse(Prompt("  Number of colors [6] › "), out var cc) && cc > 0 ? cc : 6;
+        Console.WriteLine();
 
-            var (algorithm, algorithmLabel, dedupe) = Algorithms[algIndex];
-            Console.WriteLine(algorithmLabel);
+        var results = await RunAllAsync(img, colorCount);
 
-            // ── Color count ───────────────────────────────────────────────────────
-            Console.Write("  Number of colors [6] › ");
-            if (!int.TryParse(Console.ReadLine(), out var colorCount) || colorCount <= 0)
-                colorCount = 6;
+        Console.WriteLine();
+        Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
+        foreach (var r in results)
+            Console.WriteLine($"  {Bold($"{r.Label,-16}")} {Dim($"ΔE {r.DeltaE,6:F2}")}  {Dim($"{r.ElapsedMs,6:F0} ms")}  {RenderSwatches(r.Palette)}");
+        Console.WriteLine(Dim("  ───────────────────────────────────────────────────────────"));
+        Console.WriteLine(Dim("  ΔE = reconstruction fidelity (how closely the palette rebuilds the image), not a theming"));
+        Console.WriteLine(Dim("  score — a region-aware palette intentionally trades ΔE for vivid, nameable accents."));
+        Console.WriteLine();
 
-            // ── NeuQuant options (auto-scaled by default, overridable) ─────────────
-            NeuQuantOptions? neuQuantOptions = null;
-            if (algorithm == PaletteAlgorithm.NeuQuant)
-            {
-                var auto = NeuQuantOptions.ForColorCount(colorCount);
-                Console.WriteLine();
-                Console.WriteLine(Dim($"  NeuQuant defaults → neurons: {auto.NeuronCount}, iterations: {auto.TrainingIterations}"));
-                Console.Write("  Override neurons?     [Enter to keep] › ");
-                var neuronsInput = Console.ReadLine()?.Trim();
-                Console.Write("  Override iterations?  [Enter to keep] › ");
-                var iterInput = Console.ReadLine()?.Trim();
-
-                var neurons    = int.TryParse(neuronsInput, out var n) && n > 0 ? n : auto.NeuronCount;
-                var iterations = int.TryParse(iterInput,   out var it) && it > 0 ? it : auto.TrainingIterations;
-
-                // Only allocate a custom options object if the user actually changed something
-                if (neurons != auto.NeuronCount || iterations != auto.TrainingIterations)
-                    neuQuantOptions = new NeuQuantOptions(neurons, iterations);
-
-                Console.WriteLine(Dim($"  Using → neurons: {neurons}, iterations: {iterations}"));
-                Console.WriteLine();
-            }
-
-            // ── Extraction with spinner ───────────────────────────────────────────
-            Console.WriteLine();
-            List<ColorPalette> palette;
+        // Offer to save the full per-algorithm results (palettes + ΔE + timing) as JSON.
+        if (Prompt("  Save these results to JSON? [y/N] › ") is "y" or "Y" or "yes")
+        {
+            var defaultName = $"{img.DefaultName}.results";
+            var nameInput = Prompt($"  Output name [{defaultName}] › ");
+            var baseName = string.IsNullOrWhiteSpace(nameInput) ? defaultName : Sanitize(nameInput);
+            var path = Path.GetFullPath($"{baseName}.json");
             try
             {
-                palette = await RunWithSpinner(
-                    $"  Extracting palette using {Bold(algorithmLabel)}",
-                    () => Generator.ExtractColorPaletteAsync(source, colorCount, isUrl, algorithm, dedupe, neuQuantOptions));
+                WriteResultsJson(img, colorCount, results, path);
+                Console.WriteLine($"  {Fg(0, 230, 120, "✔")} Saved {Dim(path)}");
             }
             catch (Exception ex)
             {
-                Console.WriteLine();
-                Console.WriteLine($"  {Fg(255, 80, 80, "✖")} Failed: {ex.Message}");
-                Pause();
-                return;
+                Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {ex.Message}");
             }
-
-            // ── Display ───────────────────────────────────────────────────────────
-            var label = isUrl ? source : Path.GetFileName(source);
-            DisplayPalette(palette, algorithmLabel, label);
-            Pause();
+            Console.WriteLine();
         }
 
-        // ── Spinner ───────────────────────────────────────────────────────────────
-        private static async Task<T> RunWithSpinner<T>(string message, Func<Task<T>> work)
+        Pause();
+    }
+
+    // Runs every algorithm in CompareSet on the image, timing each (single-run wall-clock, incl. decode)
+    // and scoring it by mean ΔE. Results are returned sorted best-first.
+    private static async Task<List<AlgorithmRun>> RunAllAsync(ImageSource img, int colorCount)
+    {
+        var results = new List<AlgorithmRun>();
+
+        foreach (var (algorithm, label) in CompareSet)
         {
-            char[] frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
-            var cts = new CancellationTokenSource();
-
-            var spin = Task.Run(async () =>
-            {
-                var i = 0;
-                while (!cts.Token.IsCancellationRequested)
-                {
-                    var frame = AnsiSupported ? $"\e[38;2;0;200;255m{frames[i % frames.Length]}\e[0m" : "-";
-                    Console.Write($"\r  {frame} {message}   ");
-                    i++;
-                    try { await Task.Delay(80, cts.Token); }
-                    catch (OperationCanceledException) { break; }
-                }
-            }, cts.Token);
-
-            T result;
             try
             {
-                result = await work();
-            }
-            finally
-            {
-                await cts.CancelAsync();
-                try { await spin; } catch { /* ignored */ }
-            }
+                var stopwatch = Stopwatch.StartNew();
+                var palette = await RunWithSpinner($"  {label}",
+                    () => Generator.ExtractColorPaletteAsync(img.Data, colorCount, algorithm,
+                        maxDegreeOfParallelism: Environment.ProcessorCount));
+                stopwatch.Stop();
 
-            Console.Write($"\r  {Fg(0, 230, 120, "✔")} {message}   \n");
-            return result;
+                var deltaE = PaletteQuality.MeanDeltaE(img.Data, palette,
+                    maxDegreeOfParallelism: Environment.ProcessorCount);
+
+                results.Add(new AlgorithmRun(label, palette, deltaE, stopwatch.Elapsed.TotalMilliseconds));
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {label}: {ex.Message}");
+            }
         }
 
-        // ── Palette display ───────────────────────────────────────────────────────
-        private static void DisplayPalette(List<ColorPalette> palette, string algorithm, string source)
+        return results;
+    }
+
+    // Serializes the full comparison (every algorithm's palette + ΔE + timing) to a JSON file.
+    private static void WriteResultsJson(ImageSource img, int colorCount, List<AlgorithmRun> results, string path)
+    {
+        var root = new JsonObject
         {
-            var totalPixels = palette.Sum(p => (long)p.PixelCount);
-            if (totalPixels == 0) totalPixels = 1;
+            ["source"] = img.Label,
+            ["colorCount"] = colorCount,
+            ["selection"] = nameof(PaletteSelectionMode.Diverse),
+            ["generatedUtc"] = DateTime.UtcNow.ToString("o"),
+            ["note"] = "elapsedMs is single-run wall-clock including image decode; meanDeltaE is reconstruction fidelity (lower = closer pixel reconstruction), not a theming-quality ranking.",
+        };
 
-            const int barWidth = 28;
+        var resultsArray = new JsonArray();
+        foreach (var run in results)
+        {
+            var totalPixels = run.Palette.Sum(p => (long)p.PixelCount);
+            var colors = new JsonArray();
 
-            Console.WriteLine();
-            Console.WriteLine($"  {Bold("Source:")}  {Dim(source)}");
-            Console.WriteLine($"  {Bold("Method:")}  {algorithm}");
-            Console.WriteLine($"  {Bold("Colors:")}  {palette.Count}");
-            Console.WriteLine();
-            Console.WriteLine(Dim("  ─────────────────────────────────────────────────────"));
-
-            for (var i = 0; i < palette.Count; i++)
+            foreach (var c in run.Palette)
             {
-                var c = palette[i];
-                var pct = totalPixels > 0 ? c.PixelCount * 100.0 / totalPixels : 0;
-                var filledBars = (int)Math.Round(pct / 100.0 * barWidth);
-                var bar = new string('█', filledBars) + new string('░', barWidth - filledBars);
-
-                // ── Swatch ────────────────────────────────────────────────────────
-                string swatch;
-                if (AnsiSupported)
+                var (h, s, l) = ToHsl(c.R, c.G, c.B);
+                colors.Add(new JsonObject
                 {
-                    swatch = Bg(c.R, c.G, c.B, "      ");
-                }
-                else
-                {
-                    var originalBg = Console.BackgroundColor;
-                    var originalFg = Console.ForegroundColor;
-                    Console.BackgroundColor = MapToConsoleColor(c.R, c.G, c.B);
-                    Console.ForegroundColor = IsDarkColor(c.R, c.G, c.B) ? ConsoleColor.White : ConsoleColor.Black;
-                    Console.Write($"  #{i + 1:D2}  ");
-                    Console.BackgroundColor = originalBg;
-                    Console.ForegroundColor = originalFg;
-                    Console.WriteLine($" {c.AsHex}  {pct,5:F1}%  {c.PixelCount:N0} px");
-                    Console.WriteLine(Dim("  ─────────────────────────────────────────────────────"));
-                    continue;
-                }
-
-                // ── ANSI row ──────────────────────────────────────────────────────
-                var coloredBar = Fg(c.R, c.G, c.B, bar);
-                var hexLabel   = Bold(c.AsHex);
-                var nameHint   = Dim(GetColorName(c.R, c.G, c.B));
-                Console.WriteLine($"  {swatch}  {hexLabel}  {nameHint,-18} {coloredBar} {pct,5:F1}%");
+                    ["hex"] = c.AsHex,
+                    ["rgb"] = new JsonArray { c.R, c.G, c.B },
+                    ["hsl"] = new JsonArray { h, s, l },
+                    ["name"] = ColorNaming.NearestName(c.R, c.G, c.B),
+                    ["pixelCount"] = c.PixelCount,
+                    ["percentage"] = totalPixels > 0 ? Math.Round(c.PixelCount * 100.0 / totalPixels, 2) : 0.0,
+                });
             }
 
-            Console.WriteLine(Dim("  ─────────────────────────────────────────────────────"));
-            Console.WriteLine();
+            resultsArray.Add(new JsonObject
+            {
+                ["algorithm"] = run.Label,
+                ["meanDeltaE"] = Math.Round(run.DeltaE, 4),
+                ["elapsedMs"] = Math.Round(run.ElapsedMs, 2),
+                ["colorCount"] = run.Palette.Count,
+                ["colors"] = colors,
+            });
         }
 
-        // ── Nearest CSS-ish color name ─────────────────────────────────────────────
-        private static readonly (string Name, byte R, byte G, byte B)[] ColorNames =
+        root["results"] = resultsArray;
+        File.WriteAllText(path, root.ToJsonString(new JsonSerializerOptions { WriteIndented = true }));
+    }
+
+    private static string RenderSwatches(IReadOnlyList<ColorPalette> palette)
+    {
+        if (!AnsiSupported)
+            return string.Join(' ', palette.Select(c => c.AsHex));
+
+        var sb = new StringBuilder();
+        foreach (var c in palette)
+            sb.Append(Bg(c.R, c.G, c.B, "  "));
+        return sb.ToString();
+    }
+
+    // ── Export ────────────────────────────────────────────────────────────────
+    private static async Task PromptExport(List<ColorPalette> palette, ImageSource img)
+    {
+        Console.WriteLine($"  {Bold("Export this palette?")} {Dim("(Enter to skip)")}");
+
+        var menu = new StringBuilder("  ");
+        for (var i = 0; i < ExportFormats.Length; i++)
+            menu.Append($"{Bold($"{i + 1})")} {ExportFormats[i].Label}   ");
+        menu.Append($"{Bold("A)")} All");
+        Console.WriteLine(menu.ToString());
+
+        var choice = Prompt("  Export › ");
+        if (string.IsNullOrEmpty(choice))
+            return;
+
+        PaletteExportFormat[] selected;
+        if (choice.Equals("A", StringComparison.OrdinalIgnoreCase))
+            selected = [.. ExportFormats.Select(f => f.Format)];
+        else if (int.TryParse(choice, out var n) && n >= 1 && n <= ExportFormats.Length)
+            selected = [ExportFormats[n - 1].Format];
+        else
+        {
+            Console.WriteLine($"  {Fg(255, 80, 80, "✖")} Unknown choice — skipping export.");
+            return;
+        }
+
+        var nameInput = Prompt($"  Output name [{img.DefaultName}] › ");
+        var baseName = string.IsNullOrWhiteSpace(nameInput) ? img.DefaultName : Sanitize(nameInput);
+        var options = new PaletteExportOptions { PaletteName = baseName };
+
+        Console.WriteLine();
+        foreach (var format in selected)
+        {
+            try
+            {
+                var path = Path.GetFullPath($"{baseName}.{Exporter.GetFileExtension(format)}");
+                await Exporter.ExportToFileAsync(palette, format, path, options);
+                Console.WriteLine($"  {Fg(0, 230, 120, "✔")} Saved {Dim(path)}");
+            }
+            catch (Exception ex)
+            {
+                Console.WriteLine($"  {Fg(255, 80, 80, "✖")} {format}: {ex.Message}");
+            }
+        }
+        Console.WriteLine();
+    }
+
+    private static string DeriveUrlName(string url)
+    {
+        if (Uri.TryCreate(url, UriKind.Absolute, out var uri))
+        {
+            var segment = uri.Segments.LastOrDefault()?.Trim('/');
+            var candidate = string.IsNullOrWhiteSpace(segment) ? uri.Host : Path.GetFileNameWithoutExtension(segment);
+            return Sanitize(candidate);
+        }
+        return "palette";
+    }
+
+    private static string Sanitize(string? name)
+    {
+        if (string.IsNullOrWhiteSpace(name))
+            return "palette";
+
+        var invalid = Path.GetInvalidFileNameChars();
+        var cleaned = new string([.. name.Select(ch => invalid.Contains(ch) ? '_' : ch)]).Trim();
+        return string.IsNullOrWhiteSpace(cleaned) ? "palette" : cleaned;
+    }
+
+    // ── Palette display (swatch + hex + RGB + HSL + name + share) ─────────────────
+    private static void DisplayPalette(List<ColorPalette> palette, string method, string source)
+    {
+        var totalPixels = palette.Sum(p => (long)p.PixelCount);
+        if (totalPixels == 0) totalPixels = 1;
+
+        const int barWidth = 10;
+
+        Console.WriteLine();
+        Console.WriteLine($"  {Bold("Source:")}  {Dim(source)}");
+        Console.WriteLine($"  {Bold("Method:")}  {method}");
+        Console.WriteLine($"  {Bold("Colors:")}  {palette.Count}");
+        Console.WriteLine();
+
+        for (var i = 0; i < palette.Count; i++)
+        {
+            var c = palette[i];
+            var (h, s, l) = ToHsl(c.R, c.G, c.B);
+            var pct = c.PixelCount * 100.0 / totalPixels;
+            var rgb = $"rgb({c.R,3},{c.G,3},{c.B,3})";
+            var hsl = $"hsl({h,3},{s,3}%,{l,3}%)";
+            var name = ColorNaming.NearestName(c.R, c.G, c.B);
+
+            if (AnsiSupported)
+            {
+                var filled = (int)Math.Round(pct / 100.0 * barWidth);
+                var bar = Fg(c.R, c.G, c.B, new string('█', filled) + new string('░', barWidth - filled));
+                Console.WriteLine($"  {Bg(c.R, c.G, c.B, "      ")}  {Bold(c.AsHex)}  {Dim(rgb)}  {Dim(hsl)}  {name,-11}{bar} {pct,5:F1}%");
+            }
+            else
+            {
+                var originalBg = Console.BackgroundColor;
+                var originalFg = Console.ForegroundColor;
+                Console.BackgroundColor = MapToConsoleColor(c.R, c.G, c.B);
+                Console.ForegroundColor = IsDarkColor(c.R, c.G, c.B) ? ConsoleColor.White : ConsoleColor.Black;
+                Console.Write($"  #{i + 1:D2}  ");
+                Console.BackgroundColor = originalBg;
+                Console.ForegroundColor = originalFg;
+                Console.WriteLine($" {c.AsHex}  {rgb}  {hsl}  {name,-11} {pct,5:F1}%  {c.PixelCount:N0} px");
+            }
+        }
+        Console.WriteLine();
+    }
+
+    // ── Spinner with an elapsed timer (skipped when output isn't an ANSI terminal) ─
+    private static async Task<T> RunWithSpinner<T>(string message, Func<Task<T>> work)
+    {
+        if (!AnsiSupported)
+            return await work();
+
+        char[] frames = ['⠋', '⠙', '⠹', '⠸', '⠼', '⠴', '⠦', '⠧', '⠇', '⠏'];
+        var cts = new CancellationTokenSource();
+        var sw = Stopwatch.StartNew();
+
+        var spin = Task.Run(async () =>
+        {
+            var i = 0;
+            while (!cts.Token.IsCancellationRequested)
+            {
+                Console.Write($"\r  \e[38;2;0;200;255m{frames[i % frames.Length]}\e[0m {message}  {Dim($"{sw.Elapsed.TotalSeconds:F1}s")}   ");
+                i++;
+                try { await Task.Delay(80, cts.Token); }
+                catch (OperationCanceledException) { break; }
+            }
+        }, cts.Token);
+
+        T result;
+        try { result = await work(); }
+        finally
+        {
+            await cts.CancelAsync();
+            try { await spin; } catch { /* ignored */ }
+        }
+
+        Console.Write($"\r  {Fg(0, 230, 120, "✔")} {message}  {Dim($"{sw.Elapsed.TotalSeconds:F1}s")}   \n");
+        return result;
+    }
+
+    // ── RGB → HSL (h in degrees, s & l in percent) ────────────────────────────────
+    private static (int H, int S, int L) ToHsl(byte r8, byte g8, byte b8)
+    {
+        var r = r8 / 255.0;
+        var g = g8 / 255.0;
+        var b = b8 / 255.0;
+
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var l = (max + min) / 2.0;
+
+        double h = 0, s = 0;
+        if (max > min)
+        {
+            var d = max - min;
+            s = l > 0.5 ? d / (2.0 - max - min) : d / (max + min);
+            if (max == r) h = (g - b) / d + (g < b ? 6.0 : 0.0);
+            else if (max == g) h = (b - r) / d + 2.0;
+            else h = (r - g) / d + 4.0;
+            h /= 6.0;
+        }
+
+        return ((int)Math.Round(h * 360.0), (int)Math.Round(s * 100.0), (int)Math.Round(l * 100.0));
+    }
+
+    // ── Banner ──────────────────────────────────────────────────────────────────
+    private static void DrawBanner()
+    {
+        SafeClear();
+
+        string[] lines =
         [
-            ("Red",         220,  20,  60),
-            ("Orange",      255, 140,   0),
-            ("Yellow",      255, 215,   0),
-            ("Lime",         50, 205,  50),
-            ("Green",         0, 128,   0),
-            ("Teal",          0, 128, 128),
-            ("Cyan",          0, 255, 255),
-            ("Sky Blue",    135, 206, 235),
-            ("Blue",          0,   0, 255),
-            ("Navy",          0,   0, 128),
-            ("Indigo",       75,   0, 130),
-            ("Violet",      238, 130, 238),
-            ("Magenta",     255,   0, 255),
-            ("Pink",        255, 105, 180),
-            ("Brown",       139,  69,  19),
-            ("Maroon",      128,   0,   0),
-            ("Olive",       128, 128,   0),
-            ("White",       255, 255, 255),
-            ("Silver",      192, 192, 192),
-            ("Gray",        128, 128, 128),
-            ("Charcoal",     54,  69,  79),
-            ("Black",         0,   0,   0),
+            @"   ___                 _____                    ",
+            @"  / _ \  __   __ ___  |_   _|  ___   _ __   ___",
+            @" | | | | \ \ / // _ \   | |   / _ \ | '_ \ / _ \",
+            @" | |_| |  \ V /|  __/   | |  | (_) || | | ||  __/",
+            @"  \___/    \_/  \___|   |_|   \___/ |_| |_| \___|",
         ];
 
-        private static string GetColorName(byte r, byte g, byte b)
+        (byte R, byte G, byte B)[] stops =
+        [
+            (138,  43, 226),
+            ( 99,  32, 243),
+            ( 60,  80, 255),
+            (  0, 180, 255),
+            (  0, 230, 230),
+        ];
+
+        for (var i = 0; i < lines.Length; i++)
         {
-            var best     = ColorNames[0].Name;
-            var bestDist = long.MaxValue;
-            foreach (var (name, nr, ng, nb) in ColorNames)
-            {
-                var dr = (long)(nr - r);
-                var dg = (long)(ng - g);
-                var db = (long)(nb - b);
-                var dist = dr * dr + dg * dg + db * db;
-                if (dist >= bestDist) continue;
-                bestDist = dist;
-                best     = name;
-            }
-            return best;
+            var (r, g, b) = stops[i];
+            Console.WriteLine(AnsiSupported ? $"\e[38;2;{r};{g};{b}m{lines[i]}\e[0m" : lines[i]);
         }
 
-        // ── ConsoleColor fallback ─────────────────────────────────────────────────
-        private static ConsoleColor MapToConsoleColor(byte r, byte g, byte b)
+        Console.WriteLine(Dim("  Color Palette Extractor\n"));
+    }
+
+    // ── ConsoleColor fallback (legacy terminals without truecolor ANSI) ───────────
+    private static ConsoleColor MapToConsoleColor(byte r, byte g, byte b)
+    {
+        var consoleColors = new Dictionary<ConsoleColor, (int R, int G, int B)>
         {
-            var consoleColors = new Dictionary<ConsoleColor, (int R, int G, int B)>
-            {
-                [ConsoleColor.Black]       = (0,   0,   0),
-                [ConsoleColor.DarkBlue]    = (0,   0, 139),
-                [ConsoleColor.DarkGreen]   = (0, 100,   0),
-                [ConsoleColor.DarkCyan]    = (0, 139, 139),
-                [ConsoleColor.DarkRed]     = (139,  0,   0),
-                [ConsoleColor.DarkMagenta] = (139,  0, 139),
-                [ConsoleColor.DarkYellow]  = (184, 134,  11),
-                [ConsoleColor.Gray]        = (190, 190, 190),
-                [ConsoleColor.DarkGray]    = (105, 105, 105),
-                [ConsoleColor.Blue]        = (0,   0, 255),
-                [ConsoleColor.Green]       = (0, 255,   0),
-                [ConsoleColor.Cyan]        = (0, 255, 255),
-                [ConsoleColor.Red]         = (255,  0,   0),
-                [ConsoleColor.Magenta]     = (255,  0, 255),
-                [ConsoleColor.Yellow]      = (255, 255,  0),
-                [ConsoleColor.White]       = (255, 255, 255),
-            };
+            [ConsoleColor.Black]       = (0,   0,   0),
+            [ConsoleColor.DarkBlue]    = (0,   0, 139),
+            [ConsoleColor.DarkGreen]   = (0, 100,   0),
+            [ConsoleColor.DarkCyan]    = (0, 139, 139),
+            [ConsoleColor.DarkRed]     = (139,  0,   0),
+            [ConsoleColor.DarkMagenta] = (139,  0, 139),
+            [ConsoleColor.DarkYellow]  = (184, 134,  11),
+            [ConsoleColor.Gray]        = (190, 190, 190),
+            [ConsoleColor.DarkGray]    = (105, 105, 105),
+            [ConsoleColor.Blue]        = (0,   0, 255),
+            [ConsoleColor.Green]       = (0, 255,   0),
+            [ConsoleColor.Cyan]        = (0, 255, 255),
+            [ConsoleColor.Red]         = (255,  0,   0),
+            [ConsoleColor.Magenta]     = (255,  0, 255),
+            [ConsoleColor.Yellow]      = (255, 255,  0),
+            [ConsoleColor.White]       = (255, 255, 255),
+        };
 
-            var best     = ConsoleColor.Black;
-            var bestDist = long.MaxValue;
-            foreach (var kvp in consoleColors)
-            {
-                var dr = kvp.Value.R - r;
-                var dg = kvp.Value.G - g;
-                var db = kvp.Value.B - b;
-                var dist = (long)dr * dr + (long)dg * dg + (long)db * db;
-                if (dist >= bestDist) continue;
-                bestDist = dist;
-                best     = kvp.Key;
-            }
-            return best;
-        }
-
-        private static bool IsDarkColor(byte r, byte g, byte b) =>
-            0.299 * r + 0.587 * g + 0.114 * b < 128;
-
-        private static void Pause()
+        var best = ConsoleColor.Black;
+        var bestDist = long.MaxValue;
+        foreach (var kvp in consoleColors)
         {
-            Console.WriteLine(Dim("  Press any key to return to the menu…"));
-            Console.ReadKey(true);
+            var dr = kvp.Value.R - r;
+            var dg = kvp.Value.G - g;
+            var db = kvp.Value.B - b;
+            var dist = (long)dr * dr + (long)dg * dg + (long)db * db;
+            if (dist >= bestDist) continue;
+            bestDist = dist;
+            best = kvp.Key;
         }
+        return best;
+    }
+
+    private static bool IsDarkColor(byte r, byte g, byte b) =>
+        0.299 * r + 0.587 * g + 0.114 * b < 128;
+
+    // ── Small console helpers (cross-platform & redirect-safe) ───────────────────
+    private static void SafeClear()
+    {
+        if (Console.IsOutputRedirected)
+            return;
+        try { Console.Clear(); }
+        catch (IOException) { /* not a real terminal; ignore */ }
+    }
+
+    private static string? Prompt(string label)
+    {
+        Console.Write(label);
+        return Console.ReadLine()?.Trim();
+    }
+
+    private static void Pause()
+    {
+        if (Console.IsInputRedirected)
+            return;
+        Console.WriteLine(Dim("  Press Enter to continue…"));
+        Console.ReadLine();
     }
 }
-
