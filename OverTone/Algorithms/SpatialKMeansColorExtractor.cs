@@ -42,6 +42,11 @@ public sealed class SpatialKMeansColorExtractor : ColorPaletteExtractorBase
 
     /// <inheritdoc />
     protected override List<ColorPalette> ExtractCore(DecodedImage image, int colorCount, int maxDegreeOfParallelism)
+        => ExtractCore(image, colorCount, maxDegreeOfParallelism, CancellationToken.None);
+
+    /// <inheritdoc />
+    protected override List<ColorPalette> ExtractCore(
+        DecodedImage image, int colorCount, int maxDegreeOfParallelism, CancellationToken cancellationToken)
     {
         var img = DownscaleToMaxPixels(image, _maxPixels);
         int w = img.Width, h = img.Height, n = w * h;
@@ -88,6 +93,7 @@ public sealed class SpatialKMeansColorExtractor : ColorPaletteExtractorBase
 
         for (var iter = 0; iter < _maxIterations; iter++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (maxDegreeOfParallelism > 1 && m >= ParallelThreshold)
             {
                 Parallel.ForEach(
@@ -129,6 +135,8 @@ public sealed class SpatialKMeansColorExtractor : ColorPaletteExtractorBase
 
             if (!changed) break;
         }
+
+        cancellationToken.ThrowIfCancellationRequested();
 
         // Map clusters back onto the full grid (transparent pixels stay -1) and build a peak-color palette.
         var clusterId = new int[n];

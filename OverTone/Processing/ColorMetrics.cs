@@ -246,6 +246,56 @@ public static class ColorMetrics
     }
 
     /// <summary>
+    /// Converts an sRGB color to HSL — hue in degrees (0..360), saturation and lightness in 0..1.
+    /// </summary>
+    public static (double H, double S, double L) RgbToHsl(byte r8, byte g8, byte b8)
+    {
+        var r = r8 / 255.0;
+        var g = g8 / 255.0;
+        var b = b8 / 255.0;
+
+        var max = Math.Max(r, Math.Max(g, b));
+        var min = Math.Min(r, Math.Min(g, b));
+        var l = (max + min) / 2.0;
+
+        double h = 0, s = 0;
+        if (max > min)
+        {
+            var d = max - min;
+            s = l > 0.5 ? d / (2.0 - max - min) : d / (max + min);
+
+            if (max == r)
+                h = (g - b) / d + (g < b ? 6.0 : 0.0);
+            else if (max == g)
+                h = (b - r) / d + 2.0;
+            else
+                h = (r - g) / d + 4.0;
+
+            h /= 6.0;
+        }
+
+        return (h * 360.0, s, l);
+    }
+
+    /// <summary>
+    /// Linearly interpolates between two sRGB colors in OkLab space, returning the blend at
+    /// <paramref name="t"/> (clamped to 0..1; <c>0</c> = the first color, <c>1</c> = the second).
+    /// Interpolating in OkLab keeps the path perceptually even and avoids the muddy mid-tones and hue
+    /// skew of a naive per-channel sRGB blend — ideal for cross-fading UI colors between images.
+    /// </summary>
+    public static (byte R, byte G, byte B) LerpOkLab(
+        byte r1, byte g1, byte b1, byte r2, byte g2, byte b2, double t)
+    {
+        t = Math.Clamp(t, 0.0, 1.0);
+        var (l1, a1, bb1) = RgbToOkLab(r1, g1, b1);
+        var (l2, a2, bb2) = RgbToOkLab(r2, g2, b2);
+        return OkLabToRgb(
+            l1 + (l2 - l1) * t,
+            a1 + (a2 - a1) * t,
+            bb1 + (bb2 - bb1) * t);
+    }
+
+    /// <summary>
     /// Converts an OkLab value to linear RGB (0..1, unclamped) using Ottosson's inverse matrices.
     /// </summary>
     private static (double R, double G, double B) OkLabToLinear(double l, double a, double b)

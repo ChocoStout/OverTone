@@ -1,4 +1,5 @@
 using OverTone;
+using OverTone.Processing;
 
 namespace OverTone.Export;
 
@@ -15,31 +16,8 @@ internal static class ExportFormatting
     /// </summary>
     public static (int H, int S, int L) ToHsl(ColorPalette color)
     {
-        var r = color.R / 255.0;
-        var g = color.G / 255.0;
-        var b = color.B / 255.0;
-
-        var max = Math.Max(r, Math.Max(g, b));
-        var min = Math.Min(r, Math.Min(g, b));
-        var l = (max + min) / 2.0;
-
-        double h = 0, s = 0;
-        if (max > min)
-        {
-            var d = max - min;
-            s = l > 0.5 ? d / (2.0 - max - min) : d / (max + min);
-
-            if (max == r)
-                h = (g - b) / d + (g < b ? 6.0 : 0.0);
-            else if (max == g)
-                h = (b - r) / d + 2.0;
-            else
-                h = (r - g) / d + 4.0;
-
-            h /= 6.0;
-        }
-
-        return ((int)Math.Round(h * 360.0), (int)Math.Round(s * 100.0), (int)Math.Round(l * 100.0));
+        var (h, s, l) = ColorMetrics.RgbToHsl(color.R, color.G, color.B);
+        return ((int)Math.Round(h), (int)Math.Round(s * 100.0), (int)Math.Round(l * 100.0));
     }
 
     /// <summary>

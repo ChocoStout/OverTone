@@ -45,15 +45,21 @@ public sealed class SlicColorExtractor : ColorPaletteExtractorBase
 
     /// <inheritdoc />
     protected override List<ColorPalette> ExtractCore(DecodedImage image, int colorCount, int maxDegreeOfParallelism)
+        => ExtractCore(image, colorCount, maxDegreeOfParallelism, CancellationToken.None);
+
+    /// <inheritdoc />
+    protected override List<ColorPalette> ExtractCore(
+        DecodedImage image, int colorCount, int maxDegreeOfParallelism, CancellationToken cancellationToken)
     {
         var img = DownscaleToMaxPixels(image, _maxPixels);
-        var labels = Segment(img, maxDegreeOfParallelism, out var superpixelCount);
+        var labels = Segment(img, maxDegreeOfParallelism, cancellationToken, out var superpixelCount);
+        cancellationToken.ThrowIfCancellationRequested();
         return RegionPaletteBuilder.FromSlicLabels(
             labels, superpixelCount, img.Rgba, img.Width, img.Height, _mergeDeltaE);
     }
 
     /// <summary>Runs SLIC and returns a superpixel label per pixel (-1 for transparent/unassigned).</summary>
-    private int[] Segment(DecodedImage img, int maxDegreeOfParallelism, out int kActual)
+    private int[] Segment(DecodedImage img, int maxDegreeOfParallelism, CancellationToken cancellationToken, out int kActual)
     {
         int w = img.Width, h = img.Height, n = w * h;
         var rgba = img.Rgba;
@@ -153,6 +159,7 @@ public sealed class SlicColorExtractor : ColorPaletteExtractorBase
 
         for (var iter = 0; iter < _iterations; iter++)
         {
+            cancellationToken.ThrowIfCancellationRequested();
             if (maxDegreeOfParallelism > 1 && n >= ParallelThreshold)
             {
                 Parallel.ForEach(

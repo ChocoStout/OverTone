@@ -116,11 +116,12 @@ public static class PaletteQuality
     /// by coverage, largest first. Counts are integers, so the parallel path is order-independent.
     /// </summary>
     public static List<ColorPalette> AssignCoverage(byte[] imageData, List<ColorPalette> palette,
-        int maxDegreeOfParallelism = 1)
+        int maxDegreeOfParallelism = 1, CancellationToken cancellationToken = default)
     {
         if (palette.Count == 0)
             return palette;
 
+        cancellationToken.ThrowIfCancellationRequested();
         var image = ImageResult.FromMemory(imageData, ColorComponents.RedGreenBlueAlpha);
         var pixels = image.Data;
         var pixelCount = pixels.Length / 4;
@@ -157,7 +158,7 @@ public static class PaletteQuality
             var sync = new object();
             Parallel.ForEach(
                 Partitioner.Create(0, pixelCount),
-                new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism },
+                new ParallelOptions { MaxDegreeOfParallelism = maxDegreeOfParallelism, CancellationToken = cancellationToken },
                 () => new long[palette.Count],
                 (range, _, local) =>
                 {

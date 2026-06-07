@@ -28,6 +28,21 @@ public interface IColorPaletteExtractor
         => ExtractColorPaletteAsync(imageData, colorCount);
 
     /// <summary>
+    /// Extracts a palette, optionally in parallel, observing a <see cref="CancellationToken"/>. The default
+    /// implementation ignores the token and runs the synchronous overload — built-in extractors override
+    /// this to check the token between iterations, so a caller can abandon a long run (e.g. when the user
+    /// skips to the next track). Implementers only need the two-argument overload; overriding this is optional.
+    /// </summary>
+    /// <param name="imageData">The raw image bytes (for example, PNG or JPEG contents).</param>
+    /// <param name="colorCount">The number of colors to include in the returned palette.</param>
+    /// <param name="maxDegreeOfParallelism">Maximum worker threads; values &lt;= 1 run sequentially.</param>
+    /// <param name="cancellationToken">A token to observe while extracting.</param>
+    /// <returns>A task that resolves to a list of <see cref="ColorPalette"/> items.</returns>
+    Task<List<ColorPalette>> ExtractColorPaletteAsync(
+        byte[] imageData, int colorCount, int maxDegreeOfParallelism, CancellationToken cancellationToken)
+        => ExtractColorPaletteAsync(imageData, colorCount, maxDegreeOfParallelism);
+
+    /// <summary>
     /// The algorithm identifier implemented by this extractor.
     /// </summary>
     PaletteAlgorithm Algorithm { get; }

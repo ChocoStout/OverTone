@@ -27,6 +27,16 @@ public readonly record struct Rgb(byte R, byte G, byte B)
             Convert.ToByte(s.Substring(4, 2), 16));
     }
 
+    /// <summary>
+    /// Interpolates between two colors at <paramref name="t"/> (0..1) in OkLab space — perceptually even,
+    /// so theme cross-fades look smooth. <c>0</c> returns <paramref name="a"/>, <c>1</c> returns <paramref name="b"/>.
+    /// </summary>
+    public static Rgb Lerp(Rgb a, Rgb b, double t)
+    {
+        var (r, g, bl) = Processing.ColorMetrics.LerpOkLab(a.R, a.G, a.B, b.R, b.G, b.B, t);
+        return new Rgb(r, g, bl);
+    }
+
     /// <inheritdoc />
     public override string ToString() => Hex;
 }

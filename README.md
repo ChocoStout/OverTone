@@ -29,6 +29,7 @@ Extract beautiful, region-aware color palettes from any image — local file or 
 |---|---|
 | 🧩 **Image-space (region-aware)** | Colors come from *regions* — SLIC superpixels merged by color, or spatial 5D K-Means — so objects drive the palette, not just the global histogram |
 | 🎯 **One-call `GetColors`** | `Palette.GetColorsAsync(image, n)` — no algorithm, mode, or threshold to pick; distinct colors with honest coverage |
+| 🌗 **Theming from art** | `Palette.GetThemeAsync(image)` → a WCAG-checked light/dark `ColorScheme` (semantic roles, "on" colors, tonal ramps); export as CSS or SCSS tokens |
 | 🌈 **Peak, not mean** | Each region contributes its *representative* (peak) color, so vivid accents stay vivid instead of averaging to mud |
 | 🧠 **Selectable narrowing** | `Salient` (chroma × area), `Diverse` (farthest-point CIELAB), or `Dominant` |
 | 🌐 **URL + file support** | Pass a local path or any HTTP/HTTPS image URL |
@@ -209,7 +210,12 @@ public class ColorPalette
     public byte   G          { get; set; }
     public byte   B          { get; set; }
     public int    PixelCount { get; set; }
-    public string AsHex      { get; }       // "#RRGGBB"
+    public string AsHex      { get; }                  // "#RRGGBB"
+
+    public int    ToArgb();                            // 0xFFRRGGBB (opaque alpha)
+    public (double H, double S, double L) ToHsl();     // H 0–360, S/L 0–1
+    public double RelativeLuminance { get; }           // WCAG luminance, 0–1
+    public bool   IsDark            { get; }           // true → white text is more legible
 }
 ```
 
@@ -349,6 +355,39 @@ public class GplPaletteExporter : IPaletteExporter
 ```
 
 `PaletteExporter` uses the exporters you give it (or the full set registered by `AddOverTone()`); the built-in six are wired up by default.
+
+---
+
+## Dynamic theming from an image
+
+Go straight from album art (or any image) to a complete, accessible UI theme — one call, no tuning:
+
+```csharp
+using OverTone;
+using OverTone.Theming;
+
+// Extract → seed → a WCAG-aware light + dark theme.
+ThemePair theme = await Palette.GetThemePairAsync("cover.jpg");
+
+// Semantic roles, each with a matching "on" color chosen for contrast:
+Rgb primary   = theme.Light.Primary;
+Rgb onPrimary = theme.Light.OnPrimary;   // text/icons that sit on `primary`
+
+// Emit web design tokens — light defaults + dark overrides:
+string css  = theme.AsCss();    // :root { --color-primary: …; } + @media / [data-theme="dark"]
+string scss = theme.AsScss();   // $color-light: ( "primary": …, … );  $color-dark: ( … );
+```
+
+`GetThemeAsync` returns one `ColorScheme`; `GetThemePairAsync` returns matching **light + dark**. Pass a
+`SchemeOptions` to tune the contrast target (AA/AAA), the harmony used to synthesize accents, and tonal
+ramps (`50…950`). Every `(role, on-color)` pairing is forced to meet the WCAG contrast target.
+
+- **Caching.** For repeated calls on the same art, wrap a generator in a **`PaletteCache`** — a thread-safe
+  LRU keyed by content hash (`byte[]`) or by source string (URL, so repeats also skip the download).
+- **Cancellation.** Every extraction/theming entry point accepts a `CancellationToken` (the file/URL
+  overloads cancel the download too), so you can abandon a stale run — e.g. when the track changes.
+- **Smooth transitions.** `ColorScheme.Lerp` and `ColorInterpolation.Lerp` cross-fade in OkLab, so a theme
+  can animate evenly from one image's colors to the next instead of hard-cutting.
 
 ---
 
