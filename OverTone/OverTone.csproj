@@ -1,31 +1,30 @@
-﻿<Project Sdk="Microsoft.NET.Sdk">
+<Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <!-- Multi-target: net8.0 (LTS, widest reach) and net10.0 (current). -->
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 
-    <!-- NuGet package identity -->
+    <!-- NuGet package identity (license, icon, releaseNotes, repo, symbols are shared
+         via Directory.Build.props). -->
     <PackageId>OverTone</PackageId>
     <Title>OverTone — Color Palette Extractor</Title>
-    <Description>
-      Extract region-aware, perceptually distinct color palettes from images using image-space
-      segmentation — SLIC superpixels and spatial 5D K-Means — with peak (not averaged) region colors
-      and a saliency-ranked GetColors entry point. Supports local files and URLs. Async-first;
-      dependency-free core (only StbImageSharp, for decoding).
-    </Description>
+    <Description>Extract region-aware, perceptually distinct color palettes from images using image-space segmentation — SLIC superpixels and spatial 5D K-Means — with peak (not averaged) region colors and a saliency-ranked GetColors entry point. Works with local files and URLs. Async-first; dependency-free core (only StbImageSharp, for decoding).</Description>
     <PackageTags>color;palette;extraction;image;slic;superpixel;segmentation;kmeans;oklab</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
     <PackageReadmeFile>README.md</PackageReadmeFile>
-    <PackageProjectUrl>https://github.com/ChocoStout/OverTone</PackageProjectUrl>
-    <PublishRepositoryUrl>true</PublishRepositoryUrl>
+
+    <!-- Packaging behavior -->
+    <IsPackable>true</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
 
   <ItemGroup>
     <None Include="..\README.md" Pack="true" PackagePath="\" />
+    <None Include="..\icon.png" Pack="true" PackagePath="\" />
   </ItemGroup>
 
   <ItemGroup>
-    <PackageReference Include="StbImageSharp" Version="2.30.15" />
+    <PackageReference Include="StbImageSharp" />
   </ItemGroup>
 
 </Project>

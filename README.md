@@ -10,7 +10,7 @@
 
 **Color Palette Extractor for .NET**
 
-[![.NET](https://img.shields.io/badge/.NET-10.0-512bd4?logo=dotnet)](https://dotnet.microsoft.com/)
+[![.NET](https://img.shields.io/badge/.NET-8.0%20%7C%2010.0-512bd4?logo=dotnet)](https://dotnet.microsoft.com/)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
 [![NuGet](https://img.shields.io/nuget/v/OverTone?logo=nuget)](https://www.nuget.org/packages/OverTone)
 [![Build](https://img.shields.io/github/actions/workflow/status/ChocoStout/OverTone/build.yml?logo=github)](https://github.com/ChocoStout/OverTone/actions)
