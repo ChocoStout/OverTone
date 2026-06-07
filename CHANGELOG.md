@@ -8,7 +8,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 This file covers both published packages — **OverTone** and
 **OverTone.Extensions.DependencyInjection** — which are versioned together.
 
-## [Unreleased]
+## [1.1.0] - 2026-06-06
 
 ### Added
 - **One-call theming from an image**: `Palette.GetThemeAsync` / `GetThemePairAsync` and the matching
@@ -47,5 +47,5 @@ This file covers both published packages — **OverTone** and
 - Multi-targeting for **.NET 8.0** and **.NET 10.0**.
 - Source Link, deterministic builds, a package icon, and symbol packages (`.snupkg`).
 
-[Unreleased]: https://github.com/ChocoStout/OverTone/compare/v1.0.0...HEAD
+[1.1.0]: https://github.com/ChocoStout/OverTone/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/ChocoStout/OverTone/releases/tag/v1.0.0
