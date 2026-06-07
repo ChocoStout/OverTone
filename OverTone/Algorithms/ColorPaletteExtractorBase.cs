@@ -17,25 +17,56 @@ public abstract class ColorPaletteExtractorBase : IColorPaletteExtractor
 
     /// <inheritdoc />
     public Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount)
-        => ExtractColorPaletteAsync(imageData, colorCount, 1);
+        => ExtractColorPaletteAsync(imageData, colorCount, 1, CancellationToken.None);
 
     /// <inheritdoc />
     public Task<List<ColorPalette>> ExtractColorPaletteAsync(byte[] imageData, int colorCount, int maxDegreeOfParallelism)
+        => ExtractColorPaletteAsync(imageData, colorCount, maxDegreeOfParallelism, CancellationToken.None);
+
+    /// <inheritdoc />
+    public Task<List<ColorPalette>> ExtractColorPaletteAsync(
+        byte[] imageData, int colorCount, int maxDegreeOfParallelism, CancellationToken cancellationToken)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(colorCount);
+        cancellationToken.ThrowIfCancellationRequested();
 
         var image = DecodeImage(imageData);
-        var palette = ExtractCore(image, colorCount, Math.Max(1, maxDegreeOfParallelism));
+        var palette = ExtractCore(image, colorCount, ClampParallelism(maxDegreeOfParallelism), cancellationToken);
         return Task.FromResult(palette);
     }
 
     /// <summary>
-    /// Performs the algorithm-specific extraction from a decoded image (RGBA bytes plus dimensions).
+    /// Clamps a requested worker-thread count to a sane range: at least 1, and never more than
+    /// <see cref="Environment.ProcessorCount"/>. Oversubscribing CPU-bound segmentation doesn't speed it
+    /// up and can starve co-hosted work; the extractors are deterministic, so the clamp only affects speed.
+    /// </summary>
+    protected static int ClampParallelism(int maxDegreeOfParallelism)
+        => Math.Clamp(maxDegreeOfParallelism, 1, Environment.ProcessorCount);
+
+    /// <summary>
+    /// Performs the algorithm-specific extraction from a decoded image (RGBA bytes plus dimensions). This
+    /// is the one member a concrete extractor must implement; override the cancellation-aware overload too
+    /// if the algorithm can check a token between iterations.
     /// </summary>
     /// <param name="image">The decoded image (RGBA buffer + width/height).</param>
     /// <param name="colorCount">Number of colors to return.</param>
     /// <param name="maxDegreeOfParallelism">Worker-thread cap; <c>1</c> means sequential.</param>
     protected abstract List<ColorPalette> ExtractCore(DecodedImage image, int colorCount, int maxDegreeOfParallelism);
+
+    /// <summary>
+    /// Cancellation-aware extraction. The default delegates to
+    /// <see cref="ExtractCore(DecodedImage, int, int)"/> and ignores the token; the built-in extractors
+    /// override this to check <paramref name="cancellationToken"/> between iterations so a long run can be
+    /// abandoned. Overriding it is optional — a custom extractor that ignores cancellation needs only the
+    /// three-argument overload.
+    /// </summary>
+    /// <param name="image">The decoded image (RGBA buffer + width/height).</param>
+    /// <param name="colorCount">Number of colors to return.</param>
+    /// <param name="maxDegreeOfParallelism">Worker-thread cap; <c>1</c> means sequential.</param>
+    /// <param name="cancellationToken">Token observed between iterations for cooperative cancellation.</param>
+    protected virtual List<ColorPalette> ExtractCore(
+        DecodedImage image, int colorCount, int maxDegreeOfParallelism, CancellationToken cancellationToken)
+        => ExtractCore(image, colorCount, maxDegreeOfParallelism);
 
     /// <summary>
     /// Box-downscales an image so it has at most <paramref name="maxPixels"/> pixels, preserving the 2D

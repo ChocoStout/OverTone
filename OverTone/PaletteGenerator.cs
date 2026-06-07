@@ -1,5 +1,6 @@
 ﻿using OverTone.Algorithms;
 using OverTone.Processing;
+using OverTone.Theming;
 
 namespace OverTone;
 
@@ -70,6 +71,7 @@ public class PaletteGenerator
     /// Maximum worker threads for parallel extraction (currently honored by the spatial extractors). 1 (default) runs
     /// sequentially; larger values parallelize the work and produce identical palettes, just faster.
     /// </param>
+    /// <param name="cancellationToken">A token to observe; cancels the download and aborts extraction between iterations.</param>
     /// <returns>A task that resolves to a list of <see cref="ColorPalette"/> entries, ordered by frequency.</returns>
     /// <exception cref="NotSupportedException">Thrown when the requested algorithm is not implemented.</exception>
     /// <exception cref="System.IO.IOException">Thrown when reading the source image fails.</exception>
@@ -78,14 +80,15 @@ public class PaletteGenerator
         PaletteSelectionMode selection = PaletteSelectionMode.Diverse,
         int? candidatePoolMultiplier = null,
         double minDeltaE = 12.0,
-        int maxDegreeOfParallelism = 1)
+        int maxDegreeOfParallelism = 1,
+        CancellationToken cancellationToken = default)
     {
         var imageData = isUrl
-            ? await _httpClient.GetByteArrayAsync(source)
-            : await File.ReadAllBytesAsync(source);
+            ? await _httpClient.GetByteArrayAsync(source, cancellationToken)
+            : await File.ReadAllBytesAsync(source, cancellationToken);
 
         return await ExtractColorPaletteAsync(imageData, colorCount, algorithm, selection,
-            candidatePoolMultiplier, minDeltaE, maxDegreeOfParallelism);
+            candidatePoolMultiplier, minDeltaE, maxDegreeOfParallelism, cancellationToken);
     }
 
     /// <summary>
@@ -100,6 +103,7 @@ public class PaletteGenerator
     /// <param name="candidatePoolMultiplier">Candidates per color before narrowing; <c>null</c> uses a per-mode default.</param>
     /// <param name="minDeltaE">Minimum CIE76 Delta-E between colors kept by <see cref="PaletteSelectionMode.Dominant"/>.</param>
     /// <param name="maxDegreeOfParallelism">Maximum worker threads (honored by the spatial extractors); 1 = sequential. Larger values yield identical palettes, just faster.</param>
+    /// <param name="cancellationToken">A token to observe; aborts extraction between iterations.</param>
     /// <returns>A task that resolves to a list of <see cref="ColorPalette"/> entries, ordered by frequency.</returns>
     /// <exception cref="NotSupportedException">Thrown when the requested algorithm is not implemented.</exception>
     /// <exception cref="UnsupportedImageFormatException">Thrown when the data is not a recognized image.</exception>
@@ -108,7 +112,8 @@ public class PaletteGenerator
         PaletteSelectionMode selection = PaletteSelectionMode.Diverse,
         int? candidatePoolMultiplier = null,
         double minDeltaE = 12.0,
-        int maxDegreeOfParallelism = 1)
+        int maxDegreeOfParallelism = 1,
+        CancellationToken cancellationToken = default)
     {
         // Reject anything that isn't a recognized image before the decoder touches it.
         ImageValidation.EnsureSupportedImage(imageData);
@@ -121,19 +126,19 @@ public class PaletteGenerator
         if (selection == PaletteSelectionMode.Dominant)
         {
             var multiplier = Math.Max(1, candidatePoolMultiplier ?? 4);
-            var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism);
+            var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism, cancellationToken);
             return PalettePostProcessing.RemoveNearDuplicateByDeltaE(candidates, minDeltaE, maxCount: colorCount);
         }
         else if (selection == PaletteSelectionMode.Salient)
         {
             var multiplier = Math.Max(1, candidatePoolMultiplier ?? 5);
-            var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism);
+            var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism, cancellationToken);
             return PalettePostProcessing.SelectSalient(candidates, colorCount, minDeltaE);
         }
         else
         {
             var multiplier = Math.Max(1, candidatePoolMultiplier ?? 5);
-            var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism);
+            var candidates = await extractor.ExtractColorPaletteAsync(imageData, colorCount * multiplier, maxDegreeOfParallelism, cancellationToken);
             return PalettePostProcessing.SelectDiverse(candidates, colorCount);
         }
     }
@@ -149,9 +154,11 @@ public class PaletteGenerator
     /// <param name="imageData">The raw, encoded image bytes (PNG, JPEG, BMP, …).</param>
     /// <param name="colorCount">How many colors to return.</param>
     /// <param name="maxDegreeOfParallelism">Maximum worker threads; 1 (default) runs sequentially.</param>
+    /// <param name="cancellationToken">A token to observe; aborts extraction between iterations.</param>
     /// <returns>The main colors, ordered by image coverage (largest first).</returns>
     /// <exception cref="UnsupportedImageFormatException">Thrown when the data is not a recognized image.</exception>
-    public async Task<List<ColorPalette>> GetColorsAsync(byte[] imageData, int colorCount = 6, int maxDegreeOfParallelism = 1)
+    public async Task<List<ColorPalette>> GetColorsAsync(byte[] imageData, int colorCount = 6,
+        int maxDegreeOfParallelism = 1, CancellationToken cancellationToken = default)
     {
         ArgumentOutOfRangeException.ThrowIfNegativeOrZero(colorCount);
         ImageValidation.EnsureSupportedImage(imageData);
@@ -162,7 +169,7 @@ public class PaletteGenerator
 
         // SLIC segments by its own superpixel budget (colorCount is not used for segmentation) and merges
         // adjacent same-color superpixels into regions, each carrying a representative (peak) color.
-        var regions = await extractor.ExtractColorPaletteAsync(imageData, colorCount, maxDegreeOfParallelism);
+        var regions = await extractor.ExtractColorPaletteAsync(imageData, colorCount, maxDegreeOfParallelism, cancellationToken);
 
         // Distinct colors (OkLab), ranked by saliency, narrowed to the requested count.
         var distinct = PalettePostProcessing.RemoveNearDuplicateByOkLab(regions);
@@ -174,24 +181,74 @@ public class PaletteGenerator
             .ToList();
 
         // Honest coverage: reassign every visible pixel to its nearest returned color.
-        return PaletteQuality.AssignCoverage(imageData, selected, maxDegreeOfParallelism);
+        return PaletteQuality.AssignCoverage(imageData, selected, maxDegreeOfParallelism, cancellationToken);
     }
 
     /// <summary>
     /// The no-config entry point for an image file or URL. See
-    /// <see cref="GetColorsAsync(byte[], int, int)"/> for the pipeline.
+    /// <see cref="GetColorsAsync(byte[], int, int, CancellationToken)"/> for the pipeline.
     /// </summary>
     /// <param name="source">A file path or URL to the image.</param>
     /// <param name="colorCount">How many colors to return.</param>
     /// <param name="isUrl">True when <paramref name="source"/> is a URL; false for a local file path.</param>
     /// <param name="maxDegreeOfParallelism">Maximum worker threads; 1 (default) runs sequentially.</param>
+    /// <param name="cancellationToken">A token to observe; cancels the download and aborts extraction between iterations.</param>
     public async Task<List<ColorPalette>> GetColorsAsync(string source, int colorCount = 6, bool isUrl = false,
-        int maxDegreeOfParallelism = 1)
+        int maxDegreeOfParallelism = 1, CancellationToken cancellationToken = default)
     {
         var imageData = isUrl
-            ? await _httpClient.GetByteArrayAsync(source)
-            : await File.ReadAllBytesAsync(source);
+            ? await _httpClient.GetByteArrayAsync(source, cancellationToken)
+            : await File.ReadAllBytesAsync(source, cancellationToken);
 
-        return await GetColorsAsync(imageData, colorCount, maxDegreeOfParallelism);
+        return await GetColorsAsync(imageData, colorCount, maxDegreeOfParallelism, cancellationToken);
+    }
+
+    /// <summary>
+    /// One call from image to a ready-to-use <see cref="ColorScheme"/>: extracts the main colors (see
+    /// <see cref="GetColorsAsync(byte[], int, int, CancellationToken)"/>), seeds the theme from the most
+    /// dominant color and offers the rest as accents, then synthesizes a WCAG-aware scheme — semantic
+    /// roles, matching "on" colors, and (optionally) tonal ramps. This is the "harmonize" path: colors may
+    /// be normalized into a usable range, unlike raw extraction which reports exactly what's in the pixels.
+    /// </summary>
+    /// <param name="imageData">The raw, encoded image bytes (PNG, JPEG, BMP, …).</param>
+    /// <param name="options">Scheme tuning (mode, contrast target, harmony, ramps); <c>null</c> uses defaults.</param>
+    /// <param name="colorCount">How many colors to extract as the seed + accent pool.</param>
+    /// <param name="maxDegreeOfParallelism">Maximum worker threads; 1 (default) runs sequentially.</param>
+    /// <param name="cancellationToken">A token to observe while extracting.</param>
+    public async Task<ColorScheme> GetThemeAsync(byte[] imageData, SchemeOptions? options = null,
+        int colorCount = 6, int maxDegreeOfParallelism = 1, CancellationToken cancellationToken = default)
+    {
+        var colors = await GetColorsAsync(imageData, colorCount, maxDegreeOfParallelism, cancellationToken);
+        return colors.BuildScheme(options);
+    }
+
+    /// <summary>
+    /// One call from an image file or URL to a <see cref="ColorScheme"/>. See
+    /// <see cref="GetThemeAsync(byte[], SchemeOptions, int, int, CancellationToken)"/>.
+    /// </summary>
+    public async Task<ColorScheme> GetThemeAsync(string source, SchemeOptions? options = null,
+        int colorCount = 6, bool isUrl = false, int maxDegreeOfParallelism = 1, CancellationToken cancellationToken = default)
+    {
+        var colors = await GetColorsAsync(source, colorCount, isUrl, maxDegreeOfParallelism, cancellationToken);
+        return colors.BuildScheme(options);
+    }
+
+    /// <summary>
+    /// One call from image to a matching light + dark <see cref="ThemePair"/>, seeded from the image's
+    /// colors. See <see cref="GetThemeAsync(byte[], SchemeOptions, int, int, CancellationToken)"/>.
+    /// </summary>
+    public async Task<ThemePair> GetThemePairAsync(byte[] imageData, SchemeOptions? options = null,
+        int colorCount = 6, int maxDegreeOfParallelism = 1, CancellationToken cancellationToken = default)
+    {
+        var colors = await GetColorsAsync(imageData, colorCount, maxDegreeOfParallelism, cancellationToken);
+        return colors.BuildThemePair(options);
+    }
+
+    /// <summary>One call from an image file or URL to a matching light + dark <see cref="ThemePair"/>.</summary>
+    public async Task<ThemePair> GetThemePairAsync(string source, SchemeOptions? options = null,
+        int colorCount = 6, bool isUrl = false, int maxDegreeOfParallelism = 1, CancellationToken cancellationToken = default)
+    {
+        var colors = await GetColorsAsync(source, colorCount, isUrl, maxDegreeOfParallelism, cancellationToken);
+        return colors.BuildThemePair(options);
     }
 }

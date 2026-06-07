@@ -37,6 +37,39 @@ public sealed class ColorScheme(ThemeMode mode, IReadOnlyDictionary<ColorRole, R
     public static ThemePair BuildThemePair(string seedHex, SchemeOptions? options = null)
         => BuildThemePair(Rgb.FromHex(seedHex), options);
 
+    /// <summary>
+    /// Interpolates between two schemes at <paramref name="t"/> (0..1) in OkLab — for smoothly cross-fading
+    /// a UI theme (e.g. as the now-playing track changes). Only roles present in <em>both</em> schemes are
+    /// included; a role's ramp is interpolated when both sides expose matching steps, otherwise it is
+    /// dropped. The result takes its <see cref="Mode"/> from whichever scheme is nearer
+    /// (<paramref name="t"/> &lt; 0.5 → <paramref name="a"/>).
+    /// </summary>
+    public static ColorScheme Lerp(ColorScheme a, ColorScheme b, double t)
+    {
+        ArgumentNullException.ThrowIfNull(a);
+        ArgumentNullException.ThrowIfNull(b);
+        t = Math.Clamp(t, 0.0, 1.0);
+
+        var roles = new Dictionary<ColorRole, RoleColor>();
+        foreach (var (role, ra) in a._roles)
+        {
+            if (!b._roles.TryGetValue(role, out var rb)) continue;
+
+            IReadOnlyList<Shade>? ramp = null;
+            if (ra.Ramp is { } rampA && rb.Ramp is { } rampB && rampA.Count == rampB.Count)
+            {
+                var shades = new List<Shade>(rampA.Count);
+                for (var i = 0; i < rampA.Count; i++)
+                    shades.Add(new Shade(rampA[i].Step, Rgb.Lerp(rampA[i].Color, rampB[i].Color, t)));
+                ramp = shades;
+            }
+
+            roles[role] = new RoleColor(Rgb.Lerp(ra.Color, rb.Color, t), Rgb.Lerp(ra.On, rb.On, t), ramp);
+        }
+
+        return new ColorScheme(t < 0.5 ? a.Mode : b.Mode, roles);
+    }
+
     private RoleColor Role(ColorRole role) => _roles.TryGetValue(role, out var c) ? c : default;
 
     /// <summary>The dominant brand color.</summary>

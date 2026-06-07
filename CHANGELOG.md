@@ -10,6 +10,26 @@ This file covers both published packages — **OverTone** and
 
 ## [Unreleased]
 
+### Added
+- **One-call theming from an image**: `Palette.GetThemeAsync` / `GetThemePairAsync` and the matching
+  `PaletteGenerator` methods — extract → seed → a WCAG-aware `ColorScheme` (or light/dark `ThemePair`)
+  in a single call, instead of wiring extraction to the theming layer by hand.
+- **Cooperative cancellation**: `CancellationToken` parameters on `GetColorsAsync`,
+  `ExtractColorPaletteAsync`, and a new optional `IColorPaletteExtractor` overload. The built-in
+  extractors observe the token between iterations, and the file/URL overloads also cancel the download.
+- **`ColorPalette` conversion helpers**: `ToArgb()`, `ToHsl()`, `RelativeLuminance`, and `IsDark`, plus a
+  public `ColorMetrics.RgbToHsl`.
+- **Perceptual (OkLab) interpolation** for smooth color transitions: `ColorMetrics.LerpOkLab`, `Rgb.Lerp`,
+  `ColorInterpolation.Lerp` (colors and palettes), and `ColorScheme.Lerp` (whole-theme cross-fade).
+- **SCSS token export**: `ColorScheme.AsScss()` and `ThemePair.AsScss()` — `$`-variables plus a Sass map
+  (light/dark maps for a pair), alongside the existing `AsCss()`.
+- **`PaletteCache`**: an opt-in, thread-safe LRU over `PaletteGenerator`, keyed by content hash (bytes) or
+  source string (URL — also skips the re-download).
+
+### Changed
+- `maxDegreeOfParallelism` is now clamped to `[1, Environment.ProcessorCount]`, so oversubscription can't
+  starve co-hosted work. Output is unchanged — extraction remains deterministic.
+
 ## [1.0.0] - 2026-06-06
 
 ### Added

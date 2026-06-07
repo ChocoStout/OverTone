@@ -24,6 +24,30 @@ Captured from real-image experiments (Lena, TS *1989*). Context for the work bel
 
 ---
 
+## 🔗 Loopback synergy (primary consumer)
+
+**Loopback** (`C:\Code\Loopback`) — a self-hosted Spotify-history tracker with a **Blazor Server** dashboard — is the main reason OverTone exists (though the library stays general-purpose). Its theme system is already **CSS custom properties** (`data-theme`, semantic `--color-*` tokens, 12 SCSS themes), so the theming layer is a natural fit. Today the integration is **one shallow call**: `AlbumPaletteService` runs `GetColorsAsync(bytes, 5, …)` on now-playing album art and hand-rolls HSL math (`HeroPalette.From`) to tint a single home-feed "ambient hero." None of the theming layer, exporters, selection modes, or `ExtractColorPaletteAsync` are used yet. Loopback's own roadmap already has two `needs: OverTone` items queued (dynamic album-driven theme, ambient visualizer), so the appetite is explicit.
+
+### Library features these need (OverTone changes) — ✅ shipped (1.1.0, unreleased)
+
+- [x] **One-call "theme from art"** — `Palette.GetThemeAsync` / `GetThemePairAsync` and `PaletteGenerator.GetThemeAsync` / `GetThemePairAsync` take an image (`byte[]` / path / URL) and return a ready `ColorScheme` / `ThemePair` (extract → seed → WCAG-aware scheme, all inside). Unblocks the dynamic-theme adoption item below.
+- [x] **`CancellationToken` on extraction** — added to `GetColorsAsync` / `ExtractColorPaletteAsync` plus a new optional `IColorPaletteExtractor` overload; the built-in extractors check it between iterations and the file/URL overloads cancel the download. (See the **Library API** cancellation item.)
+- [x] **Result-level color helpers** — `ColorPalette.ToArgb()`, `ToHsl()`, `RelativeLuminance`, and `IsDark` (plus public `ColorMetrics.RgbToHsl`); Loopback can delete its hand-rolled `RgbToHsl` / `HslToHex` + brightness filter.
+- [x] **Palette / scheme interpolation** — OkLab `ColorMetrics.LerpOkLab`, `Rgb.Lerp`, `ColorInterpolation.Lerp` (colors/palettes), and `ColorScheme.Lerp` (whole-theme cross-fade) for smooth track→track transitions.
+- [x] **Opt-in caching by image/content hash** — `PaletteCache`: a thread-safe LRU over `PaletteGenerator`, keyed by content hash (bytes) or source string (URL, which also skips the re-download). Replaces Loopback's hand-rolled `ConcurrentDictionary` + "clear at 256".
+- [x] **Scheme token export to SCSS** — `ColorScheme.AsScss()` / `ThemePair.AsScss()` (`$`-vars + Sass map). The Tailwind / W3C-JSON scheme emitters remain — see **Semantic & accessible palette generation**.
+- [x] **Cap for `maxDegreeOfParallelism`** — extraction now clamps it to `[1, Environment.ProcessorCount]` so oversubscription can't starve co-hosted work (deterministic output unchanged).
+
+### Adoption in Loopback (dogfoods + validates the API)
+
+These live in the Loopback repo, but each is a real test of whether the library is pleasant to use:
+
+- [ ] Replace the ~65 lines of hand-rolled HSL in `AlbumPaletteService.HeroPalette.From` with `ExtractColorPaletteAsync(…, PaletteSelectionMode.Salient)` + the theming layer's WCAG "on"-colors.
+- [ ] Ship an **album-art-driven app theme** (a 13th "Now Playing" theme) via `BuildThemePair` + `pair.AsCss(...)` scoped to `:root` / `[data-theme="dynamic"]` — already roadmapped in Loopback (`_docs/ToDos.md`, `needs: OverTone`).
+- [ ] Extend color to more surfaces — per-tile accents on album/session/detail cards and the now-playing chip (gated on the caching item above), plus a `<meta name="theme-color">` browser tint from the now-playing accent.
+
+---
+
 ## 🎨 Algorithms
 
 - [x] **Image-space / region-aware extraction — the migration** ✅  
@@ -56,25 +80,27 @@ Captured from real-image experiments (Lena, TS *1989*). Context for the work bel
 
 ## 🌈 Semantic & accessible palette generation
 
-Turn the extracted colors into a complete, ready-to-use UI palette — not just a list of swatches, but **named roles with accessible pairings and tonal ramps**. This is the "dynamic color from album art" idea (à la Material 3) and the highest-leverage remaining feature for the music-player / theming use cases. A new `PaletteScheme` / `DesignTokens` model + builder would sit on top of the extractors and `GetColors`.
+Turn the extracted colors into a complete, ready-to-use UI palette — not just a list of swatches, but **named roles with accessible pairings and tonal ramps**. This is the "dynamic color from album art" idea (à la Material 3) for the music-player / theming use cases.
+
+> **Update — the theming layer shipped.** The `OverTone.Theming` namespace turns a seed color (or an extracted palette, via `palette.BuildScheme()` / `BuildThemePair()`) into a full `ColorScheme`: semantic roles with accessible "on" colors, OkLCh tonal ramps, harmony-based accent synthesis, and WCAG-enforced contrast — all deterministic. The `OverTone.Web` sample exposes it as a live **Theme Builder** tab. The one remaining gap is **token export beyond CSS** (see that item below).
 
 - [x] **One-call "main colors" API** *(the primary, no-config use case)*  
   Done — `Palette.GetColorsAsync(image, n)` (and `PaletteGenerator.GetColorsAsync`) "just returns the N main colors" with no algorithm, mode, or ΔE to choose. Under the hood: SLIC region palette → **OkLab perceptual de-duplication** (distinct colors, not five shades of cream) → **saliency** ranking (so album-art accents aren't ranked out by frequency) → **true coverage** (every pixel reassigned to its nearest returned color, so percentages are real). Semantic *names* are available via `ColorNaming.NearestName` (not yet attached to the returned model — see the roles item).
 
-- [ ] **Semantic roles**  
-  Derive design-system roles from the extracted palette: `primary`, `secondary`, `tertiary`, plus `neutral` / `surface` / `background`, and status colors `success` / `warning` / `error` (alert) / `info`. Primary/secondary/tertiary come from the image's dominant + salient colors; status colors are conventional hues (green / amber / red / blue), optionally harmonized toward the primary. Also emit the matching **"on" colors** (`onPrimary`, `onSurface`, …) — the text/icon color that sits on each role, chosen for contrast.
+- [x] **Semantic roles**  
+  Done — `SchemeBuilder` / `ColorScheme` derive `Primary` / `Secondary` / `Tertiary`, the neutral family (`Background` / `Surface` / `SurfaceVariant` / `Neutral` / `Outline`), and status colors `Success` / `Warning` / `Error` / `Info`. Primary comes from the seed/dominant color; secondary/tertiary from distinct accents (or a harmony rotation when the image is too monochrome); status colors are canonical hues (red / amber / green / blue), optionally tone-matched or hue-shifted toward the primary. Every role emits its matching **"on" color** (`OnPrimary`, `OnSurface`, …), chosen for contrast.
 
-- [ ] **Tonal scales (shade ramps)**  
-  For each role, generate a consistent ramp of tints/shades — e.g. Tailwind-style `50…950` or a Material-3 tonal palette — by varying *tone* in a perceptual space (OkLCh / HCT) rather than naive HSL, so the steps look evenly spaced. Reuses the planned OkLab work.
+- [x] **Tonal scales (shade ramps)**  
+  Done — with `SchemeOptions.IncludeRamps`, each ramped role gets a Tailwind-style `50…950` ramp (`RoleColor.Ramp` → `Shade`) generated by varying *tone* in **OkLCh**, with a chroma curve that peaks mid-ramp and tapers at the tints/shades so the steps look perceptually even.
 
-- [ ] **WCAG contrast & accessibility**  
-  Add `ColorMetrics` helpers for WCAG **relative luminance** and **contrast ratio**, and verify each role/"on" pairing against the standard thresholds — **4.5:1** for normal text and **3:1** for large text & UI components (AA), **7:1** (AAA). Auto-select black vs white (or nudge the tone) so every pairing passes, and flag any that can't. Consider an **APCA** (WCAG 3 draft) mode as the modern perceptual alternative to the 2.x ratio.
+- [x] **WCAG contrast & accessibility**  
+  Done — `ColorMetrics` has WCAG **relative luminance** and **contrast ratio**; `SchemeOptions.ContrastTarget` sets the threshold (AA **4.5** / large-text & UI **3** / AAA **7**). The builder auto-selects black vs white per role (`BestOnColor`) and nudges the role's tone until the pairing passes (`EnsureContrast` / `ResolveRole`), keeping the best achievable when a target is unreachable. **Still TODO:** an **APCA** (WCAG 3 draft) mode as the modern perceptual alternative to the 2.x ratio.
 
-- [ ] **Harmony-based derivation**  
-  When an image yields too few distinct accents, synthesize secondary/tertiary from the primary via color-theory schemes — complementary, analogous, triadic, split-complementary — as hue rotations in OkLCh that hold chroma/tone.
+- [x] **Harmony-based derivation**  
+  Done — when an image yields too few distinct accents, `SchemeBuilder` synthesizes secondary/tertiary from the primary via `Harmony` (complementary, analogous, triadic, split-complementary) as hue rotations in OkLCh that hold chroma/tone.
 
-- [ ] **Token export**  
-  Emit the generated scheme through the existing exporters as design tokens: CSS custom properties, an SCSS map, and a Tailwind `theme.extend.colors` tree (role → shade → hex). Likely a new `IPaletteExporter` (or a dedicated builder) backed by the `PaletteScheme` model.
+- [ ] **Token export (Tailwind, JSON)** — *CSS + SCSS shipped*  
+  CSS (`scheme.AsCss()` / `pair.AsCss()`) and SCSS (`scheme.AsScss()` / `pair.AsScss()` — `$`-vars + a Sass map, ramp-aware) are done in `SchemeTokens`. **Still TODO:** a Tailwind `theme.extend.colors` tree (role → shade → hex) and a W3C/JSON design-tokens emitter — the role-aware analogues of the existing flat-palette exporters.
 
 Industry references to follow: **WCAG 2.2** contrast (relative-luminance formula, 4.5 / 3 / 7 ratios), **APCA** (WCAG 3 draft); **Material Design 3** (HCT color space, tonal palettes, dynamic color from a seed image); **Tailwind** numeric scales; **Radix Colors** / **IBM Carbon** (accessible stepped systems); and **Adobe Leonardo** (generate ramps to hit target contrast ratios).
 
@@ -82,14 +108,14 @@ Industry references to follow: **WCAG 2.2** contrast (relative-luminance formula
 
 ## 📦 Library API
 
-- [ ] **`IColorPaletteExtractor` — cancellation support**  
-  Add `CancellationToken` to `ExtractColorPaletteAsync` so long-running extractors (SLIC, spatial K-Means) can be cancelled by the caller without waiting for them to finish.
+- [x] **`IColorPaletteExtractor` — cancellation support** · *Loopback driver*  
+  Done (1.1.0) — `CancellationToken` added to `ExtractColorPaletteAsync` and the `GetColorsAsync` overloads, plus a new optional `IColorPaletteExtractor` overload (default-interface method, so existing implementers aren't broken). SLIC and spatial K-Means check the token between iterations; the file/URL paths also cancel the download.
 
 - [ ] **`ColorPalette` — add `A` (alpha) channel**  
   Useful for images with transparency. Extractors already read the alpha channel to filter invisible pixels; surfacing it in the model costs nothing.
 
-- [ ] **`ColorPalette` — `ToArgb()` / `ToHsl()` helpers**  
-  Convenience conversions that consumer apps commonly need. Keeps the conversion logic centralised rather than every caller reimplementing it.
+- [x] **`ColorPalette` — `ToArgb()` / `ToHsl()` / luminance / `IsDark` helpers** · *Loopback driver*  
+  Done (1.1.0) — `ToArgb()`, `ToHsl()`, `RelativeLuminance`, and `IsDark` on `ColorPalette`, backed by a now-public `ColorMetrics.RgbToHsl` (the exporters share it, so the HSL math lives in one place).
 
 - [ ] **`PaletteGenerator` — `IAsyncEnumerable<ColorPalette>` overload**  
   Stream palette entries one by one as they are discovered. Useful for large palettes or progressive UI rendering.
@@ -121,14 +147,14 @@ Industry references to follow: **WCAG 2.2** contrast (relative-luminance formula
 
 ## 🔧 Infrastructure
 
-- [ ] **GitHub Actions CI**  
-  Add a `.github/workflows/build.yml` that restores, builds, and runs tests on `ubuntu-latest` and `windows-latest` for every push and PR.
+- [x] **GitHub Actions CI**  
+  Done — `.github/workflows/build.yml` restores, builds (Release), tests (net8.0 + net10.0), and packs on `ubuntu-latest` **and** `windows-latest` for every push and PR to `main`/`master`. Green on `main`.
 
-- [ ] **NuGet publish workflow**  
-  Add a `release.yml` workflow that packs `OverTone.csproj` and publishes to NuGet.org when a `v*` tag is pushed. The `PackageLicenseExpression`, `PackageReadmeFile`, and `PackageTags` are already wired up in the csproj.
+- [x] **NuGet publish workflow**  
+  Done — `.github/workflows/release.yml` packs every packable project (core + DI) and publishes to **NuGet.org** and **GitHub Packages** on a `v*` tag (or manual `workflow_dispatch`), creating a GitHub Release with generated notes. **Shipped:** `v1.0.0` is tagged and live — `OverTone` 1.0.0 and `OverTone.Extensions.DependencyInjection` 1.0.0 are on NuGet.org, with a matching GitHub Release.
 
-- [ ] **`CHANGELOG.md`**  
-  Start a changelog following [Keep a Changelog](https://keepachangelog.com/) conventions so release notes are easy to produce — the image-space migration (removed algorithms, new `GetColors`, breaking `PaletteGenerator` signature change) is a natural first entry.
+- [x] **`CHANGELOG.md`**  
+  Done — `CHANGELOG.md` follows [Keep a Changelog](https://keepachangelog.com/) conventions, with a complete `1.0.0` entry covering the image-space migration (removed algorithms, new `GetColors`, breaking `PaletteGenerator` signature change) and the theming layer.
 
 - [x] **`LICENSE` file**  
   Done — `LICENSE` contains the **MIT** license text, matching `PackageLicenseExpression = MIT` in both packable projects (core + DI extensions).
