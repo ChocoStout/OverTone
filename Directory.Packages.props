@@ -1,0 +1,30 @@
+<Project>
+
+  <!--
+    Central Package Management (CPM): one source of truth for every NuGet version in the
+    repository. Projects reference packages with no Version attribute.
+    https://learn.microsoft.com/nuget/consume-packages/central-package-management
+  -->
+  <PropertyGroup>
+    <ManagePackageVersionsCentrally>true</ManagePackageVersionsCentrally>
+    <!-- Transitive pinning is left OFF: these are libraries, so transitive deps (e.g. StbImageSharp
+         flowing through the OverTone reference) should stay transitive, not be surfaced as direct
+         package dependencies in the produced .nupkg. -->
+  </PropertyGroup>
+
+  <!-- Library dependencies -->
+  <ItemGroup>
+    <PackageVersion Include="StbImageSharp" Version="2.30.15" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+    <PackageVersion Include="Microsoft.Extensions.DependencyInjection" Version="9.0.0" />
+  </ItemGroup>
+
+  <!-- Test dependencies -->
+  <ItemGroup>
+    <PackageVersion Include="Microsoft.NET.Test.Sdk" Version="17.12.0" />
+    <PackageVersion Include="xunit" Version="2.9.2" />
+    <PackageVersion Include="xunit.runner.visualstudio" Version="2.8.2" />
+    <PackageVersion Include="coverlet.collector" Version="6.0.2" />
+  </ItemGroup>
+
+</Project>

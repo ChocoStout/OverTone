@@ -1,23 +1,29 @@
 <Project Sdk="Microsoft.NET.Sdk">
 
   <PropertyGroup>
-    <TargetFramework>net10.0</TargetFramework>
+    <TargetFrameworks>net8.0;net10.0</TargetFrameworks>
 
+    <!-- NuGet package identity (license, icon, releaseNotes, repo, symbols are shared
+         via Directory.Build.props). -->
     <PackageId>OverTone.Extensions.DependencyInjection</PackageId>
     <Title>OverTone — Dependency Injection</Title>
-    <Description>
-      Microsoft.Extensions.DependencyInjection integration for OverTone: AddOverTone() registers all
-      extractors, exporters, and the PaletteGenerator/PaletteExporter facades. The core OverTone package
-      stays dependency-free; this optional package adds the DI glue.
-    </Description>
-    <PackageTags>color;palette;dependency-injection;di;extensions</PackageTags>
-    <PackageLicenseExpression>MIT</PackageLicenseExpression>
-    <PackageProjectUrl>https://github.com/ChocoStout/OverTone</PackageProjectUrl>
+    <Description>Microsoft.Extensions.DependencyInjection integration for OverTone: AddOverTone() registers all extractors, exporters, and the PaletteGenerator/PaletteExporter facades. The core OverTone package stays dependency-free; this optional package adds the DI glue.</Description>
+    <PackageTags>color;palette;dependency-injection;di;extensions;microsoft-extensions</PackageTags>
+    <PackageReadmeFile>README.md</PackageReadmeFile>
+
+    <!-- Packaging behavior -->
+    <IsPackable>true</IsPackable>
     <GenerateDocumentationFile>true</GenerateDocumentationFile>
+    <EnablePackageValidation>true</EnablePackageValidation>
   </PropertyGroup>
 
   <ItemGroup>
-    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" Version="9.0.0" />
+    <None Include="README.md" Pack="true" PackagePath="\" />
+    <None Include="..\icon.png" Pack="true" PackagePath="\" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.DependencyInjection.Abstractions" />
   </ItemGroup>
 
   <ItemGroup>

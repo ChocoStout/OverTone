@@ -1,0 +1,55 @@
+name: build
+
+on:
+  push:
+    branches: [ main, master ]
+  pull_request:
+    branches: [ main, master ]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    name: Build & test (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ ubuntu-latest, windows-latest ]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0   # full history -> deterministic Source Link
+
+      - name: Setup .NET (8 + 10)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: |
+            8.0.x
+            10.0.x
+
+      - name: Restore
+        run: dotnet restore
+
+      - name: Build
+        run: dotnet build --configuration Release --no-restore
+
+      - name: Test (net8.0 + net10.0)
+        run: dotnet test --configuration Release --no-build --verbosity normal
+
+      - name: Pack (verifies packaging + package validation)
+        run: dotnet pack --configuration Release --no-build --output ${{ runner.temp }}/nupkg
+
+      - name: Upload packages
+        if: matrix.os == 'ubuntu-latest'
+        uses: actions/upload-artifact@v4
+        with:
+          name: nupkg
+          path: |
+            ${{ runner.temp }}/nupkg/*.nupkg
+            ${{ runner.temp }}/nupkg/*.snupkg
+          if-no-files-found: error
