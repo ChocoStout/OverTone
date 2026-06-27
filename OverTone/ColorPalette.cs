@@ -44,6 +44,30 @@ public class ColorPalette
     /// </summary>
     public (double H, double S, double L) ToHsl() => ColorMetrics.RgbToHsl(R, G, B);
 
+    /// <summary>
+    /// Builds a <see cref="ColorPalette"/> from an HSL color — the inverse of <see cref="ToHsl"/>. Hue is
+    /// in degrees (normalized into 0..360), saturation and lightness in 0..1. <paramref name="pixelCount"/>
+    /// defaults to 0 since a synthesized color carries no extraction area.
+    /// </summary>
+    public static ColorPalette FromHsl(double h, double s, double l, int pixelCount = 0)
+    {
+        var (r, g, b) = ColorMetrics.HslToRgb(h, s, l);
+        return new ColorPalette { R = r, G = g, B = b, PixelCount = pixelCount };
+    }
+
+    /// <summary>
+    /// HSL "chroma" (colorfulness) of the color in 0..1 — <c>(1 - |2L - 1|) · S</c>. A vividness proxy that
+    /// down-weights pale pastels and near-blacks better than raw saturation. See <see cref="ColorMetrics.HslChroma"/>.
+    /// </summary>
+    public double HslChroma
+    {
+        get
+        {
+            var (_, s, l) = ToHsl();
+            return ColorMetrics.HslChroma(s, l);
+        }
+    }
+
     /// <summary>WCAG relative luminance of the color (0 = black, 1 = white).</summary>
     public double RelativeLuminance => ColorMetrics.RelativeLuminance(R, G, B);
 

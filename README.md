@@ -30,6 +30,7 @@ Extract beautiful, region-aware color palettes from any image — local file or 
 | 🧩 **Image-space (region-aware)** | Colors come from *regions* — SLIC superpixels merged by color, or spatial 5D K-Means — so objects drive the palette, not just the global histogram |
 | 🎯 **One-call `GetColors`** | `Palette.GetColorsAsync(image, n)` — no algorithm, mode, or threshold to pick; distinct colors with honest coverage |
 | 🌗 **Theming from art** | `Palette.GetThemeAsync(image)` → a WCAG-checked light/dark `ColorScheme` (semantic roles, "on" colors, tonal ramps); export as CSS or SCSS tokens |
+| 🌅 **Color ramps** | `SpectrumBuilder.Build(palette)` → ordered gradient stops with hues merged and cover-areas folded — ready for visualizers and dynamic backgrounds |
 | 🌈 **Peak, not mean** | Each region contributes its *representative* (peak) color, so vivid accents stay vivid instead of averaging to mud |
 | 🧠 **Selectable narrowing** | `Salient` (chroma × area), `Diverse` (farthest-point CIELAB), or `Dominant` |
 | 🌐 **URL + file support** | Pass a local path or any HTTP/HTTPS image URL |
@@ -216,6 +217,9 @@ public class ColorPalette
     public (double H, double S, double L) ToHsl();     // H 0–360, S/L 0–1
     public double RelativeLuminance { get; }           // WCAG luminance, 0–1
     public bool   IsDark            { get; }           // true → white text is more legible
+    public double HslChroma         { get; }           // (1-|2L-1|)·S — vividness proxy, 0–1
+
+    public static ColorPalette FromHsl(double h, double s, double l, int pixelCount = 0); // inverse of ToHsl
 }
 ```
 
@@ -391,6 +395,36 @@ ramps (`50…950`). Every `(role, on-color)` pairing is forced to meet the WCAG 
 
 ---
 
+## Color ramps from an image
+
+For a visualizer or dynamic background you often want a *spectrum* — an ordered color ramp — rather than a
+set of semantic theme roles. `SpectrumBuilder.Build` collapses an extracted palette into a handful of
+gradient stops: it drops near-neutral colors, merges nearby hues into one stop (folding their cover-areas
+together so a hue family is counted once), keeps the most prominent stops, and sweeps them low→high hue.
+
+```csharp
+using OverTone;
+using OverTone.Processing;
+
+List<ColorPalette> palette = await Palette.GetColorsAsync("cover.jpg", colorCount: 12);
+
+// Ordered stops, each carrying its hue family's summed cover-area as Weight.
+IReadOnlyList<GradientStop> spectrum = SpectrumBuilder.Build(palette);
+foreach (var stop in spectrum)
+    Console.WriteLine($"{stop.AsHex}  weight={stop.Weight}");
+
+// Thresholds are optional (defaults shown): chroma floor, hue-merge window, max stops.
+var coarse = SpectrumBuilder.Build(palette, chromaFloor: 0.10, hueMergeDegrees: 22.0, maxStops: 6);
+```
+
+Each `GradientStop` exposes `R`/`G`/`B`, `AsHex`, `ToHsl()`, and a `Weight` (the summed `PixelCount` of the
+colors folded into it — its share of the covered area), so consumers can size a gradient band by prominence.
+
+The supporting color math is public on `ColorMetrics`: `HslToRgb` (inverse of `RgbToHsl`),
+`HueDistance(a, b)` (shortest angular distance, 0–180°, wrapping the wheel), and `HslChroma(s, l)`.
+
+---
+
 ## Project Structure
 
 ```
@@ -402,6 +436,7 @@ OverTone/
 │   ├── PaletteAlgorithm.cs       # Slic, SpatialKMeans
 │   ├── PaletteGenerator.cs       # ExtractColorPaletteAsync + GetColorsAsync
 │   ├── Palette.cs                # static GetColors sugar
+│   ├── GradientStop.cs           # one stop of a color ramp (color + folded area weight)
 │   ├── SlicOptions.cs · SpatialKMeansOptions.cs
 │   ├── PaletteSelectionMode.cs   # Salient / Diverse / Dominant
 │   ├── IPaletteExporter.cs · PaletteExportFormat.cs · PaletteExportOptions.cs
@@ -415,7 +450,8 @@ OverTone/
 │   └── Processing/               # Color math, selection & quality metrics
 │       ├── PalettePostProcessing.cs  # Diverse / Salient + ΔE & OkLab de-dup
 │       ├── RepresentativeColor.cs    # peak (modal, chroma-biased) region color
-│       ├── ColorMetrics.cs           # RGB↔Lab, OkLab, ΔE, chroma
+│       ├── ColorMetrics.cs           # RGB↔Lab/HSL, OkLab, ΔE, chroma, hue distance
+│       ├── SpectrumBuilder.cs        # palette → ordered gradient stops (hue-merged ramp)
 │       └── PaletteQuality.cs         # mean ΔE + coverage assignment
 ├── OverTone.Extensions.DependencyInjection/   # AddOverTone() (separate package)
 ├── OverTone.Sample/              # Cross-platform console demo
