@@ -278,6 +278,57 @@ public static class ColorMetrics
     }
 
     /// <summary>
+    /// Converts an HSL color back to sRGB — the inverse of <see cref="RgbToHsl"/>. Hue is in degrees
+    /// (any value; normalized into 0..360), saturation and lightness in 0..1 (clamped). Channels are
+    /// rounded to the nearest byte, so <c>RgbToHsl ∘ HslToRgb</c> round-trips a color to within ±1.
+    /// </summary>
+    public static (byte R, byte G, byte B) HslToRgb(double h, double s, double l)
+    {
+        s = Math.Clamp(s, 0.0, 1.0);
+        l = Math.Clamp(l, 0.0, 1.0);
+
+        h %= 360.0;
+        if (h < 0) h += 360.0;
+
+        var c = (1.0 - Math.Abs(2.0 * l - 1.0)) * s;
+        var hp = h / 60.0;
+        var x = c * (1.0 - Math.Abs(hp % 2.0 - 1.0));
+
+        double r1, g1, b1;
+        switch ((int)hp)
+        {
+            case 0: (r1, g1, b1) = (c, x, 0.0); break;
+            case 1: (r1, g1, b1) = (x, c, 0.0); break;
+            case 2: (r1, g1, b1) = (0.0, c, x); break;
+            case 3: (r1, g1, b1) = (0.0, x, c); break;
+            case 4: (r1, g1, b1) = (x, 0.0, c); break;
+            default: (r1, g1, b1) = (c, 0.0, x); break; // sextant 5 (and the h==360→0 edge)
+        }
+
+        var m = l - c / 2.0;
+        return (Channel(r1 + m), Channel(g1 + m), Channel(b1 + m));
+
+        static byte Channel(double v) => (byte)Math.Round(Math.Clamp(v, 0.0, 1.0) * 255.0);
+    }
+
+    /// <summary>
+    /// Smallest angular distance between two hues, in degrees (0..180). Wraps around the color wheel, so
+    /// 350° and 10° are 20° apart, not 340°.
+    /// </summary>
+    public static double HueDistance(double a, double b)
+    {
+        var d = Math.Abs(a - b) % 360.0;
+        return d > 180.0 ? 360.0 - d : d;
+    }
+
+    /// <summary>
+    /// HSL "chroma" (colorfulness): <c>(1 - |2L - 1|) · S</c>, in 0..1. A better "is this color vivid"
+    /// proxy than raw saturation because it down-weights both pale pastels (high L) and near-blacks
+    /// (low L), which can carry a misleadingly high saturation. Near 0 for neutrals, ~1 for pure hues.
+    /// </summary>
+    public static double HslChroma(double s, double l) => (1.0 - Math.Abs(2.0 * l - 1.0)) * s;
+
+    /// <summary>
     /// Linearly interpolates between two sRGB colors in OkLab space, returning the blend at
     /// <paramref name="t"/> (clamped to 0..1; <c>0</c> = the first color, <c>1</c> = the second).
     /// Interpolating in OkLab keeps the path perceptually even and avoids the muddy mid-tones and hue
