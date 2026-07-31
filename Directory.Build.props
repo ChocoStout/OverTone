@@ -8,9 +8,11 @@
     <RepositoryUrl>https://github.com/ChocoStout/OverTone</RepositoryUrl>
     <RepositoryType>git</RepositoryType>
 
-    <!-- Shared version — bump here to release all packages together.
-         CI release builds override this from the pushed git tag (see release.yml). -->
-    <VersionPrefix>1.1.0</VersionPrefix>
+    <!-- Version is managed by release-please — do NOT hand-edit. It derives the next version
+         from Conventional Commits, bumps the line below in its release PR, and publishing
+         happens when that PR is merged (see release.yml + release-please-config.json).
+         The trailing marker tells release-please's generic updater which value to bump. -->
+    <VersionPrefix>1.1.0</VersionPrefix> <!-- x-release-please-version -->
 
     <!-- Build quality -->
     <Nullable>enable</Nullable>

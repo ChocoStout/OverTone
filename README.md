@@ -533,9 +533,11 @@ dotnet run --project OverTone.Web
 1. Fork the repository
 2. Create a feature branch: `git checkout -b feature/my-extractor`
 3. Add your extractor implementing `IColorPaletteExtractor`
-4. Open a pull request
+4. Open a pull request with a [Conventional Commits](https://www.conventionalcommits.org/) title
+   (e.g. `feat: add my extractor`) — it drives the version bump and changelog
 
 All contributions welcome — new algorithms, bug fixes, performance improvements, docs.
+See [CONTRIBUTING.md](CONTRIBUTING.md) for commit conventions and the release process.
 
 ---
 
